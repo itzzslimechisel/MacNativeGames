@@ -12,7 +12,9 @@ Ninja (one build folder per version: the game-code patch tables are compiled in,
 (c) a self-contained folder is laid out:
 
   Tears of the Kingdom <version>/
-    Tears of the Kingdom <version>.bat / .lnk   launcher (sets the environment, logs to logs/totk.log)
+    Tears of the Kingdom.exe          double-click launcher (GUI program from tools/windows/launcher; reads settings.bat, checks
+                                      game data / .NET 10 / Vulkan 1.3 with a message box, logs to logs/totk.log)
+    Tears of the Kingdom <version>.bat / .lnk   fallback launcher (same environment, console)
     settings.bat                      the settings you may edit (window size, sound, data folder, translator command)
     bin/totk-win.exe, runtime-index.bin, translator/   the runtime and the shader translator (needs the .NET 10 runtime)
     data/extracted/<ver>/{exefs,romfs} your game data, written by the import (about 17 GB; never share it)
@@ -160,6 +162,18 @@ exit /b %RC%
 '''
 
 
+def build_launcher(dest):
+    sys.path.insert(0, str(REPO / 'tools/windows/launcher'))
+    import build as launcher_build
+    cache = REPO / 'build' / 'totk-launcher.exe'
+    cache.parent.mkdir(exist_ok=True)
+    srcs = [REPO / 'tools/windows/launcher' / f for f in ('launcher.c', 'launcher.rc', 'launcher.manifest', 'totk.ico')]
+    if not cache.is_file() or cache.stat().st_mtime < max(f.stat().st_mtime for f in srcs if f.is_file()):
+        say('building the launcher exe')
+        launcher_build.build(cache)
+    shutil.copy2(cache, dest)
+
+
 def write_bat(path, text):
     path.write_bytes(text.replace(chr(13), '').replace(chr(10), chr(13) + chr(10)).encode('utf-8'))
 
@@ -252,7 +266,8 @@ def main():
         ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{pkg / (name + '.lnk')}');"
               f"$s.TargetPath='{launcher}';$s.WorkingDirectory='{pkg}';$s.WindowStyle=7;$s.Save()")
         subprocess.call(['powershell', '-NoProfile', '-Command', ps])
-    say(f'done. Launch "{launcher}" (or the .lnk). Log: {pkg / "logs/totk.log"}')
+    build_launcher(pkg / f'{APP}.exe')
+    say(f'done. Launch "{pkg / (APP + ".exe")}" (or "{launcher}" / the .lnk). Log: {pkg / "logs/totk.log"}')
 
 
 if __name__ == '__main__':
