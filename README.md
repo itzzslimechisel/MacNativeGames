@@ -2,6 +2,8 @@
 
 # English
 
+> **Windows 11?** See [README-windows.md](README-windows.md) for `build_windows.py` (emulator-based, since Windows cannot run the ARM64 code natively).
+
 **Breath of the Wild 1.6.0 is now officially supported on Mac!** (Mac only for now: no iPhone or iPad build yet.)
 **Tears of the Kingdom 1.0.0, 1.2.1 and 1.4.3 are now officially supported on Mac, iPhone and iPad!**
 

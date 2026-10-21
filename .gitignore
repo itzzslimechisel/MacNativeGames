@@ -24,3 +24,12 @@ games/totk/tools/totk_xlate/obj/
 games/totk/tools/totk_xlate/bin/
 games/totk/scripts/shader_inventory/obj/
 games/totk/scripts/shader_inventory/bin/
+
+# Windows port: CMake build trees, packaged game folders and imported game data
+/build/
+Tears of the Kingdom/
+totk_extract/
+totk_pkg/
+prebuilt/windows-x64/
+*.partial
+romfs.bin
