@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
-"""Package the native Windows x86-64 port of Tears of the Kingdom from YOUR OWN game files and keys.
+"""Package the native Windows x86-64 port of Tears of the Kingdom from YOUR OWN game files and keys, one folder per game version.
 
-  python build_windows.py base.nsp --update update-1.4.3.nsp -k prod.keys -o "C:\\Games"
+  python build_windows.py base.nsp --update update-1.4.3.nsp -k prod.keys -o "C:\\Games"      -> "Tears of the Kingdom 1.4.3"
+  python build_windows.py base.nsp -k prod.keys -o "C:\\Games"                                 -> "Tears of the Kingdom 1.0.0"
+  python build_windows.py --data-dir C:\\totk_extract --version 1.0.0 -o "C:\\Games"            (reuse an earlier import)
 
-Steps: (a) tools/windows/import_game.py verifies and extracts ExeFS + RomFS from your NSP(s) with your prod.keys;
-(b) the runtime (games/totk, target totk-win) is copied from a prebuilt folder or built with CMake + LLVM-MinGW + Ninja;
+Steps: (a) tools/windows/import_game.py verifies and extracts ExeFS + RomFS from your NSP(s) with your prod.keys (it accepts only
+the versions the runtime is patched for: 1.0.0, 1.1.1, 1.1.2, 1.2.0, 1.2.1, 1.4.3; 1.1.1 and 1.2.0 are Windows only);
+(b) the runtime (games/totk, target totk-win) for that version is copied from a prebuilt folder or built with CMake + LLVM-MinGW +
+Ninja (one build folder per version: the game-code patch tables are compiled in, runtime/game_version.h);
 (c) a self-contained folder is laid out:
 
-  Tears of the Kingdom/
-    Tears of the Kingdom.bat / .lnk   launcher (sets the environment, logs to logs/totk.log)
+  Tears of the Kingdom <version>/
+    Tears of the Kingdom <version>.bat / .lnk   launcher (sets the environment, logs to logs/totk.log)
     settings.bat                      the settings you may edit (window size, sound, data folder, translator command)
     bin/totk-win.exe, runtime-index.bin, translator/   the runtime and the shader translator (needs the .NET 10 runtime)
-    data/extracted/v143/{exefs,romfs} your game data, written by the import (about 17 GB; never share it)
+    data/extracted/<ver>/{exefs,romfs} your game data, written by the import (about 17 GB; never share it)
     user-data/ shader-cache/ logs/
 
+Packages of several versions in the same output folder share the translator files (hard links, so no extra disk space).
 Nothing from the game or keys is downloaded or distributed. Python standard library only.
 """
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -25,7 +32,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
 APP = 'Tears of the Kingdom'
-VERSION = 'v143'          # the only game version the Windows runtime is patched for (1.4.3)
+# Game versions with a Windows patch table (runtime/game_version.h): display -> extracted/<dir>, assets/expected-v<display>.json.
+# 'tested' = boots to rendered frames on Windows (Vulkan); the others have tables from the Mac port but no Windows smoke test.
+VERSIONS = {'1.0.0': ('v0', True), '1.1.1': ('v111', True), '1.1.2': ('v112', False), '1.2.0': ('v120', True),
+            '1.2.1': ('v121', False), '1.4.3': ('v143', True)}
 TRANSLATOR_DEFAULT = REPO / 'build' / 'totk_xlate-win'
 
 
@@ -45,7 +55,7 @@ def run(cmd, **kw):
 
 def find_tool(name, globs=()):
     found = shutil.which(name)
-    if found:
+    if found and 'msys' not in found.lower() and 'cygwin' not in found.lower():   # MSYS2 cmake mangles Windows paths
         return found
     for base, pattern in globs:
         for p in sorted(Path(base).glob(pattern)) if Path(base).exists() else []:
@@ -54,8 +64,31 @@ def find_tool(name, globs=()):
     return None
 
 
-def build_runtime(data_version_dir, build_dir):
-    """Configure + build totk-win (Vulkan backend) with LLVM-MinGW, CMake and Ninja; returns the build dir."""
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def main_digest(display):
+    return json.loads((REPO / f'games/totk/assets/expected-v{display}.json').read_text())['exefs_sha256']['main']
+
+
+def detect_version(data):
+    """The game versions whose extracted/<ver>/exefs/main matches the expected hash and whose romfs.bin exists."""
+    found = []
+    for display, (vdir, _) in VERSIONS.items():
+        folder = data / 'extracted' / vdir
+        main = folder / 'exefs' / 'main'
+        if main.is_file() and (folder / 'romfs' / 'romfs.bin').is_file() and sha256(main) == main_digest(display):
+            found.append(display)
+    return found
+
+
+def build_runtime(vdir, data_version_dir, build_dir):
+    """Configure + build totk-win (Vulkan backend) for one game version with LLVM-MinGW, CMake and Ninja; returns the build dir."""
     winget = Path(os.environ.get('LOCALAPPDATA', '')) / 'Microsoft/WinGet/Packages'
     clang = find_tool('x86_64-w64-mingw32-clang', [(winget, '*LLVM-MinGW*/*/bin/x86_64-w64-mingw32-clang.exe')])
     cmake = find_tool('cmake', [('C:/Program Files/CMake/bin', 'cmake.exe')])
@@ -66,15 +99,35 @@ def build_runtime(data_version_dir, build_dir):
     env['PATH'] = os.pathsep.join([str(Path(clang).parent), str(Path(cmake).parent), str(Path(ninja).parent), env['PATH']])
     run([cmake, '-S', REPO / 'games/totk', '-B', build_dir, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=RelWithDebInfo',
          '-DCMAKE_C_COMPILER=x86_64-w64-mingw32-clang', '-DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-clang++',
-         '-DTOTK_GFX=vk', f'-DTOTK_DATA_DIR={data_version_dir.as_posix()}', f'-DTOTK_GAME_VERSION={VERSION}',
+         '-DTOTK_GFX=vk', f'-DTOTK_DATA_DIR={data_version_dir.as_posix()}', f'-DTOTK_GAME_VERSION={vdir}',
          '-DTOTK_BUILD_TESTS=OFF'], env=env)
     run([cmake, '--build', build_dir, '--target', 'totk-win'], env=env)
     return build_dir
 
 
+def link_tree(src, dst, shared):
+    """Copy src to dst; files identical to one already in `shared` (another version's package) become hard links."""
+    if dst.exists():
+        shutil.rmtree(dst)
+    for p in src.rglob('*'):
+        rel = p.relative_to(src)
+        if p.is_dir() or p.suffix in ('.pdb', '.nupkg'):
+            continue
+        target = dst / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        other = shared / rel if shared else None
+        if other and other.is_file() and other.stat().st_size == p.stat().st_size and sha256(other) == sha256(p):
+            try:
+                os.link(other, target)
+                continue
+            except OSError:
+                pass
+        shutil.copy2(p, target)
+
+
 SETTINGS = r'''@echo off
 rem Settings for "@APP@". Edit and relaunch.
-rem Folder holding extracted\@VER@\exefs and extracted\@VER@\romfs (the import output).
+rem Folder holding extracted\@VER@\exefs and extracted\@VER@\romfs (the import output, game version @DISPLAY@).
 set "TOTK_DATA=@DATA@"
 rem Window size at start (F11 or Alt+Enter toggles fullscreen).
 set "TOTK_WINDOW_SIZE=1920x1080"
@@ -97,7 +150,7 @@ set "TOTK_PROFILE_DIR=%HERE%user-data"
 set "TOTK_SHADER_CACHE=%HERE%shader-cache"
 set "TOTK_XLATE_CMD="%TOTK_XLATE%" "%HERE%bin\translator\totk_xlate.dll""
 if "%TOTK_AUDIO_OFF%"=="0" set "TOTK_AUDIO_OFF="
-if not exist "%TOTK_ROMFS%\romfs.bin" (echo Game data not found in "%TOTK_DATA%". Edit settings.bat. & pause & exit /b 1)
+if not exist "%TOTK_ROMFS%\romfs.bin" (echo Game data @DISPLAY@ not found in "%TOTK_DATA%\extracted\@VER@". Edit settings.bat. & pause & exit /b 1)
 pushd "%HERE%"
 "%HERE%bin\totk-win.exe" "%TOTK_DATA%\extracted\@VER@\exefs" boot 2> "%HERE%logs\totk.log"
 set RC=%ERRORLEVEL%
@@ -114,11 +167,13 @@ def write_bat(path, text):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('base', nargs='?', type=Path, help='base game NSP (1.0.0); omit with --data-dir')
-    ap.add_argument('--update', type=Path, help='cumulative update NSP (1.4.3 for the Windows runtime)')
+    ap.add_argument('--update', type=Path, help='cumulative update NSP (1.1.2, 1.2.1 or 1.4.3); without it the package is 1.0.0')
     ap.add_argument('-k', '--keys', type=Path, help='your prod.keys')
-    ap.add_argument('-o', '--out', type=Path, default=Path('.'), help=f'folder that gets "{APP}/" (outside the repository)')
-    ap.add_argument('--data-dir', type=Path, help='keep the game data in this import output folder (holding extracted/) instead of <package>/data; without base/--update/-k it only reuses it')
-    ap.add_argument('--prebuilt', type=Path, help='folder with totk-win.exe and runtime-index.bin (or gen/runtime-index.bin): copy instead of building')
+    ap.add_argument('--version', choices=sorted(VERSIONS), help='game version to package (default: the one the import/data holds)')
+    ap.add_argument('-o', '--out', type=Path, default=Path('.'), help=f'folder that gets "{APP} <version>/" (outside the repository)')
+    ap.add_argument('--name', help=f'package folder name (default "{APP} <version>")')
+    ap.add_argument('--data-dir', type=Path, help='keep the game data in this import output folder (holding extracted/) instead of <package>/data; without base/-k it only reuses it')
+    ap.add_argument('--prebuilt', type=Path, help='folder with totk-win.exe and runtime-index.bin (or gen/runtime-index.bin) built for this version: copy instead of building')
     ap.add_argument('--translator', type=Path, default=TRANSLATOR_DEFAULT, help='folder with the published totk_xlate.dll')
     ap.add_argument('--romfs', choices=('full', 'index', 'none'), default='full', help='passed to import_game.py')
     ap.add_argument('--no-shortcut', action='store_true')
@@ -126,31 +181,51 @@ def main():
     a = ap.parse_args()
 
     out = a.out.expanduser().resolve()
-    pkg = out / APP
     if out == REPO or REPO in out.parents:
         die('choose an output folder outside the repository (it will hold game data)')
     importing = bool(a.base)
-    if importing and not (a.keys and a.update):
-        die('give the base NSP, --update <1.4.3 NSP> and -k prod.keys (or only --data-dir of an earlier import)')
+    if importing and not a.keys:
+        die('give the base NSP (and --update for 1.1.2/1.2.1/1.4.3) with -k prod.keys, or only --data-dir of an earlier import')
     if not importing and not a.data_dir:
-        die('give the base NSP, --update and -k, or --data-dir of an earlier import')
+        die('give the base NSP and -k, or --data-dir of an earlier import')
+    if importing and not a.version:
+        die('give --version (1.0.0 without --update, else the update\'s version) so the package folder can be named before the import')
+    if not importing and not a.version:
+        found = detect_version(a.data_dir.expanduser().resolve())
+        if len(found) != 1:
+            die(f'{a.data_dir} holds {", ".join(found) or "no supported version"}: pick one with --version')
+        a.version = found[0]
+    display = a.version
+    vdir, tested = VERSIONS[display]
+    if importing and (display == '1.0.0') != (a.update is None):
+        die('1.0.0 is packaged from the base NSP alone; every other version needs its --update NSP')
+    name = a.name or f'{APP} {display}'
+    pkg = out / name
     data = a.data_dir.expanduser().resolve() if a.data_dir else pkg / 'data'
-    vdir = data / 'extracted' / VERSION
-    say(f'package {pkg}; game data {data}')
+    vfolder = data / 'extracted' / vdir
+    say(f'package {pkg} (game {display}, {vdir}); game data {data}')
+    if not tested:
+        say(f'warning: {display} has a patch table but has not been smoke-tested on Windows')
     if a.dry_run:
         return
 
     # (a) import
     if importing:
-        run([sys.executable, REPO / 'tools/windows/import_game.py', '--base', a.base, '--update', a.update, '--keys', a.keys,
-             '--output', data, '--romfs', a.romfs])
-        if not (vdir / 'romfs' / 'romfs.bin').is_file():
-            die(f'import finished without {vdir}\\romfs\\romfs.bin: the Windows runtime needs the 1.4.3 update and --romfs full')
+        cmd = [sys.executable, REPO / 'tools/windows/import_game.py', '--base', a.base, '--keys', a.keys, '--output', data,
+               '--romfs', a.romfs]
+        if a.update:
+            cmd += ['--update', a.update]
+        run(cmd)
+    if not (vfolder / 'romfs' / 'romfs.bin').is_file():
+        die(f'no {vfolder}\\romfs\\romfs.bin: the runtime needs the full RomFS of {display} (import with --romfs full)')
+    if sha256(vfolder / 'exefs' / 'main') != main_digest(display):
+        die(f'{vfolder}\\exefs\\main is not the {display} main module')
 
-    # (b) runtime
-    src = a.prebuilt.resolve() if a.prebuilt else (REPO / 'prebuilt/windows-x64' if (REPO / 'prebuilt/windows-x64/totk-win.exe').is_file() else None)
+    # (b) runtime (per version: the patch tables are compiled in)
+    prebuilt = REPO / f'prebuilt/windows-x64-{vdir}'
+    src = a.prebuilt.resolve() if a.prebuilt else (prebuilt if (prebuilt / 'totk-win.exe').is_file() else None)
     if src is None:
-        src = build_runtime(vdir, REPO / 'build' / 'totk-win-x64-vk')
+        src = build_runtime(vdir, vfolder, REPO / 'build' / f'totk-win-x64-vk-{vdir}')
     exe = src / 'totk-win.exe'
     index = next((p for p in (src / 'runtime-index.bin', src / 'gen/runtime-index.bin') if p.is_file()), None)
     if not exe.is_file() or not index:
@@ -164,18 +239,17 @@ def main():
         (pkg / d).mkdir(exist_ok=True)
     shutil.copy2(exe, pkg / 'bin/totk-win.exe')
     shutil.copy2(index, pkg / 'bin/runtime-index.bin')
-    tdst = pkg / 'bin/translator'
-    if tdst.exists():
-        shutil.rmtree(tdst)
-    shutil.copytree(a.translator, tdst, ignore=shutil.ignore_patterns('*.pdb', '*.nupkg'))
+    (pkg / 'bin/game-version.txt').write_text(f'{display} {vdir}\n')
+    siblings = [p / 'bin/translator' for p in out.iterdir() if p.is_dir() and p != pkg and (p / 'bin/translator/totk_xlate.dll').is_file()]
+    link_tree(a.translator, pkg / 'bin/translator', siblings[0] if siblings else None)
     rel = '%~dp0data' if not a.data_dir else str(data)
     settings = pkg / 'settings.bat'
     if not settings.exists():   # keep the player's edits on a re-run
-        write_bat(settings, SETTINGS.replace('@APP@', APP).replace('@VER@', VERSION).replace('@DATA@', rel))
-    launcher = pkg / f'{APP}.bat'
-    write_bat(launcher, LAUNCHER.replace('@VER@', VERSION))
+        write_bat(settings, SETTINGS.replace('@APP@', name).replace('@VER@', vdir).replace('@DISPLAY@', display).replace('@DATA@', rel))
+    launcher = pkg / f'{name}.bat'
+    write_bat(launcher, LAUNCHER.replace('@VER@', vdir).replace('@DISPLAY@', display))
     if not a.no_shortcut and os.name == 'nt':
-        ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{pkg / (APP + '.lnk')}');"
+        ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{pkg / (name + '.lnk')}');"
               f"$s.TargetPath='{launcher}';$s.WorkingDirectory='{pkg}';$s.WindowStyle=7;$s.Save()")
         subprocess.call(['powershell', '-NoProfile', '-Command', ps])
     say(f'done. Launch "{launcher}" (or the .lnk). Log: {pkg / "logs/totk.log"}')

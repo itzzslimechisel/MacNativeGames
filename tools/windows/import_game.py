@@ -53,6 +53,16 @@ from extract_exefs import (decrypt, read_at, require, load_keys, container_entri
                            nca_inventory, program_nca, nca_ctr_key, record_offset, partition_entries)
 from extract_romfs import index_romfs  # noqa: E402
 
+# Windows-only updates (games/totk/assets/expected-v<display>.json with "windows_only"): the x86-64 runtime JITs the original
+# NSOs, so these need only a patch table (runtime/game_version.h), not the Mac build's rewrite manifests.
+WINDOWS_ONLY = {'v111': '1.1.1', 'v120': '1.2.0'}
+VERSIONS = dict(VERSIONS)
+for _v, _display in WINDOWS_ONLY.items():
+    _path = REPO / f'games/totk/assets/expected-v{_display}.json'
+    if _path.is_file():
+        VERSIONS[_v] = json.loads(_path.read_text())
+UPDATES = tuple(UPDATES) + tuple(v for v in WINDOWS_ONLY if v in VERSIONS)
+
 CHUNK = 8 << 20
 NODE = 0x4000   # bucket-tree node size
 
@@ -116,7 +126,8 @@ class PatchedSection:
         # The tables are encrypted with the section's own counter (plain AES-CTR), like the rest of a normal section.
         self.reloc, self.size = bucket_tree(patch.read(roff, rsize), 20, '<qqi', rcount)
         self.subs, subs_end = bucket_tree(patch.read(soff, ssize), 16, '<qBxxxI', scount)
-        require(subs_end == roff, 'BKTR subsection table does not end at the relocation table')
+        # Newer updates (1.1.2+) end the subsection table at the relocation table; 1.1.1 / 1.2.0 also cover the relocation table.
+        require(subs_end in (roff, soff), 'BKTR subsection table does not end at the relocation or subsection table')
         require(all(e[2] in (0, 1) for e in self.reloc) and all(e[1] in (0, 1) for e in self.subs), 'Unknown BKTR storage')
         self.reloc_starts = [e[0] for e in self.reloc]
         self.subs_starts = [e[0] for e in self.subs]
@@ -345,8 +356,11 @@ def step_modules(out, version):
 def romfs_valid(folder, expected):
     try:
         report = json.loads((folder / 'index.json').read_text())
-        return (report.get('status') == 'pass' and report['romfs_sha256'] == expected['romfs']['sha256']
-                and (folder / 'romfs.bin').stat().st_size == expected['romfs']['size'])
+        want = expected['romfs']
+        if want.get('sha256') is None:   # Windows-only version without a recorded image hash: the IVFC-verified report
+            return report.get('status') == 'pass' and (folder / 'romfs.bin').stat().st_size == report['romfs_size']
+        return (report.get('status') == 'pass' and report['romfs_sha256'] == want['sha256']
+                and (folder / 'romfs.bin').stat().st_size == want['size'])
     except (OSError, ValueError, KeyError):
         return False
 
@@ -359,15 +373,19 @@ def write_romfs(section, folder, expected, label):
         shutil.rmtree(folder)
     folder.mkdir(parents=True)
     partial = folder / 'romfs.bin.partial'
-    say(f'RomFS {label}: streaming {expected["romfs"]["size"] / 2**30:.1f} GiB and verifying all six IVFC levels')
+    recorded = expected['romfs'].get('sha256') is not None
+    say(f'RomFS {label}: streaming ' + (f'{expected["romfs"]["size"] / 2**30:.1f} GiB' if recorded else 'the image')
+        + ' and verifying all six IVFC levels')
     counts, size, digest = stream_romfs(section, partial)
-    if digest != expected['romfs']['sha256'] or size != expected['romfs']['size']:
+    if not recorded:
+        say(f'RomFS {label}: no recorded image hash for this version; IVFC-verified image SHA-256 {digest} ({size} bytes)')
+    elif digest != expected['romfs']['sha256'] or size != expected['romfs']['size']:
         raise BuildError(f'RomFS {label}: SHA-256 {digest[:16]}... ({size} bytes) is not the expected '
                          f'{expected["romfs"]["sha256"][:16]}... ({expected["romfs"]["size"]} bytes); the partial image is {partial}')
     partial.replace(folder / 'romfs.bin')
     files = index_romfs(folder / 'romfs.bin')
     report = dict(status='pass', ivfc_blocks=counts, romfs_size=size, romfs_sha256=digest, files=files,
-                  integrity='all six IVFC levels verified; image SHA-256 matches the expected version')
+                  integrity='all six IVFC levels verified; ' + ('image SHA-256 matches the expected version' if recorded else 'no recorded image hash for this version'))
     (folder / 'index.json').write_text(json.dumps(report, indent=2) + '\n')
     return report
 
@@ -460,7 +478,7 @@ def main(argv):
                 if args.romfs == 'full':
                     report = write_romfs(section, folder, expected, f'{expected["display_version"]} (base + update)')
                     manifest['versions'][playable]['romfs'] = dict(size=report['romfs_size'], sha256=report['romfs_sha256'],
-                                                                   files=len(report['files']), matches_expected=True)
+                                                                   files=len(report['files']), matches_expected=expected['romfs'].get('sha256') is not None)
                 elif args.romfs == 'index':
                     write_romfs_index(section, folder, f'{expected["display_version"]} (base + update)')
             finally:

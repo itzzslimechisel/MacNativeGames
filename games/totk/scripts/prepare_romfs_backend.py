@@ -3,7 +3,7 @@
 import argparse,hashlib,json,struct
 from pathlib import Path
 root=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--version', choices=('v0','v112','v121','v143','botw160'), default='v0')
+parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--version', choices=('v0','v111','v112','v120','v121','v143','botw160'), default='v0')
 parser.add_argument('--aoc', action='store_true', help='Breath of the Wild: the add-on content volumes extracted/<version>/aoc/<index> -> aoc_config.h')
 parser.add_argument('--romfs', type=Path, help='RomFS folder (index.json, romfs.bin) instead of extracted/<version>/romfs (Windows build)')
 parser.add_argument('--out', type=Path, help='output folder for romfs_config.h and runtime-index.bin (with --romfs)')

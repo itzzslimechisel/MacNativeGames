@@ -1,0 +1,18 @@
+{
+  "_comment": "Windows-only version (the x86-64 JIT runs the original NSOs; no Mac rewrite manifests). Hashes of what the import produces from the genuine 1.1.1 update over the 1.0.0 base (RomFS: base + update, all six IVFC levels verified when recorded).",
+  "windows_only": true,
+  "title_id": "0100F2C0115B6000",
+  "version": 196608,
+  "display_version": "1.1.1",
+  "exefs_sha256": {
+    "main": "d16accd1edbe15f94bb60bc0b45270a89e293aadc3d24ea833ba9c1ac47783c6",
+    "main.npdm": "0ecf8b8d8326073f5be090f69773fa277952f4ffabcd16f5d582278369ba34a7",
+    "rtld": "28317605926caa40a5cbee3e3cb290c65783b4d9f8c3697b43ca41ab2866a44d",
+    "sdk": "91573d4444d0dcd07080db78fece2b098b76080d77cdb2e1d301a2a41d7c4eea",
+    "subsdk0": "9d04c98997977e99c12a48a2dbfd3064b8da96b5152e0119064957a43f6c3f99"
+  },
+  "romfs": {
+    "size": 17051891240,
+    "sha256": "d29803a6108e3f87813337e25b2018f38bc8697462fb01af08eed50bfa7c7f9e"
+  }
+}

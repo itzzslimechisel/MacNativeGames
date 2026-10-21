@@ -116,6 +116,91 @@
 #define GAME_ADDR_0x8f6cbc 0x8f2798
 #define GAME_ADDR_0xce3fec 0xbda798
 #define GAME_OUTPUT_CALL_WORD 0x94000083u
+#elif defined(TOTK_GAME_V120) || defined(TOTK_GAME_V111)
+/* Windows only (JIT on the original NSOs, no rewrite manifests): sdk / subsdk0 / rtld are byte-identical to 1.0.0, only main
+   moved. Found from 1.0.0 by scripts/map_version_sites.py --from v0 --to v120|v111 (32 of 33, every original word unchanged
+   except v111's output call); the slow-motion check (0xce3fec) by its three original words, unique in each main. No cloth/hair
+   clock table (its code changed after 1.0.0 and the 1.1.2 / 1.2.1 places do not map from 1.0.0): GAME_NO_CLOTH_CLOCK.
+   The actor field offsets are 1.1.2's (survey only, TOTK_SURVEY; unverified). */
+#define GAME_ACTOR_NAME 0x218
+#define GAME_ACTOR_POS 0x2b4
+#define GAME_ACTOR_ROT 0x2c0
+#define GAME_NO_CLOTH_CLOCK 1
+#if defined(TOTK_GAME_V120)
+#define TOTK_GAME_VERSION "1.2.0"
+#define TOTK_GAME_DIR "v120"
+#define GAME_ADDR_0x8f6c60 0x8a93a0
+#define GAME_ADDR_0x8f6c64 0x8a93a4
+#define GAME_ADDR_0x8f6c88 0x8a93c8
+#define GAME_ADDR_0x8f6d18 0x8a9458
+#define GAME_ADDR_0x8f6d28 0x8a9468
+#define GAME_ADDR_0x8f6d7c 0x8a94bc
+#define GAME_ADDR_0x8f6d98 0x8a94d8
+#define GAME_ADDR_0x7a83f4 0x7c9cd8
+#define GAME_ADDR_0x7a83f8 0x7c9cdc
+#define GAME_ADDR_0x7a83fc 0x7c9ce0
+#define GAME_ADDR_0x7a8400 0x7c9ce4
+#define GAME_ADDR_0x7a840c 0x7c9cf0
+#define GAME_ADDR_0x7a8410 0x7c9cf4
+#define GAME_ADDR_0x8f68b8 0x8a8ff8
+#define GAME_ADDR_0x8f68bc 0x8a8ffc
+#define GAME_ADDR_0x8f68cc 0x8a900c
+#define GAME_ADDR_0x8f68d0 0x8a9010
+#define GAME_ADDR_0xc630bc 0xc345bc
+#define GAME_ADDR_0xc630c4 0xc345c4
+#define GAME_ADDR_0xc630c8 0xc345c8
+#define GAME_ADDR_0xe996ac 0xe9e0fc
+#define GAME_ADDR_0xe996b0 0xe9e100
+#define GAME_ADDR_0xc630a4 0xc345a4
+#define GAME_ADDR_0xc630a8 0xc345a8
+#define GAME_ADDR_0xc630ac 0xc345ac
+#define GAME_ADDR_0x69a18c 0x6b3cd0
+#define GAME_ADDR_0x15ecb0c 0x1614a80
+#define GAME_ADDR_0xe995c4 0xe9e014
+#define GAME_ADDR_0x4663f08 0x47194b8
+#define GAME_ADDR_0x2aa4fa0 0x2b09000
+#define GAME_ADDR_0x453f648 0x4606d90
+#define GAME_ADDR_0x8f6cbc 0x8a93fc
+#define GAME_ADDR_0xce3fec 0xb9f660
+#define GAME_OUTPUT_CALL_WORD 0x94000082u
+#else
+#define TOTK_GAME_VERSION "1.1.1"
+#define TOTK_GAME_DIR "v111"
+#define GAME_ADDR_0x8f6c60 0x81fef8
+#define GAME_ADDR_0x8f6c64 0x81fefc
+#define GAME_ADDR_0x8f6c88 0x81ff20
+#define GAME_ADDR_0x8f6d18 0x81ffb0
+#define GAME_ADDR_0x8f6d28 0x81ffc0
+#define GAME_ADDR_0x8f6d7c 0x820014
+#define GAME_ADDR_0x8f6d98 0x820030
+#define GAME_ADDR_0x7a83f4 0x783164
+#define GAME_ADDR_0x7a83f8 0x783168
+#define GAME_ADDR_0x7a83fc 0x78316c
+#define GAME_ADDR_0x7a8400 0x783170
+#define GAME_ADDR_0x7a840c 0x78317c
+#define GAME_ADDR_0x7a8410 0x783180
+#define GAME_ADDR_0x8f68b8 0x81fb50
+#define GAME_ADDR_0x8f68bc 0x81fb54
+#define GAME_ADDR_0x8f68cc 0x81fb64
+#define GAME_ADDR_0x8f68d0 0x81fb68
+#define GAME_ADDR_0xc630bc 0xceca68
+#define GAME_ADDR_0xc630c4 0xceca70
+#define GAME_ADDR_0xc630c8 0xceca74
+#define GAME_ADDR_0xe996ac 0xecb04c
+#define GAME_ADDR_0xe996b0 0xecb050
+#define GAME_ADDR_0xc630a4 0xceca50
+#define GAME_ADDR_0xc630a8 0xceca54
+#define GAME_ADDR_0xc630ac 0xceca58
+#define GAME_ADDR_0x69a18c 0x9e20d0   /* survey only; 25 of 44 callers agree */
+#define GAME_ADDR_0x15ecb0c 0x1636170
+#define GAME_ADDR_0xe995c4 0xecaf64
+#define GAME_ADDR_0x4663f08 0x4732b78
+#define GAME_ADDR_0x2aa4fa0 0x2b26620
+#define GAME_ADDR_0x453f648 0x46205b0
+#define GAME_ADDR_0x8f6cbc 0x81ff54
+#define GAME_ADDR_0xce3fec 0xbea414
+#define GAME_OUTPUT_CALL_WORD 0x94000083u
+#endif
 #else
 #define TOTK_GAME_VERSION "1.0.0"
 #define TOTK_GAME_DIR "v0"

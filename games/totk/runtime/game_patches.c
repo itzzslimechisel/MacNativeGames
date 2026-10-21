@@ -138,6 +138,9 @@ static const uint64_t cloth_call = 0x8222f0, cloth_update = 0x89822c;
 static const ClothInline cloth_inline[3] = {{0x9d1e64, 0x9d1e74, 0, 8, 0x104, 0}, {0x9d2d34, 0x9d2d2c, 0, 8, 0x104, 0},
                                             {0x9e7648, 0x9e764c, 1, 0, 0x134, 0}};
 static const uint64_t cloth_call = 0x9d2774, cloth_update = 0x88a998;
+#elif defined(GAME_NO_CLOTH_CLOCK)
+static const ClothInline cloth_inline[3];
+static const uint64_t cloth_call, cloth_update;
 #else
 static const ClothInline cloth_inline[3] = {{0x7b5988, 0x7b598c, 0, 8, -0x40, 1}, {0x7b6b28, 0x7b6b2c, 0, 8, -0x40, 1},
                                             {0x7f5ec4, 0x7f5ed0, 1, 0, 0x114, 0}};
@@ -241,7 +244,11 @@ static void patch_realtime(Module *m) {
         put_word(m, sites[i].off, repl[i], "real-time frame step");
     frame_step_data = (_Atomic uint64_t *)(void *)(m->base + data_off);
     atomic_store(frame_step_data, frame_step_bits(1.0f / 60.0f));
+#ifdef GAME_NO_CLOTH_CLOCK
+    fprintf(stderr, "[totk] %s cloth/hair clock: no table for this version (cloth keeps the game clock)\n", TOTK_GAME_VERSION);
+#else
     patch_cloth_clock(m, data_off);
+#endif
     fprintf(stderr,"[totk] real-time frame step: %zu verified instructions; initial 16.67 ms, sampled at each present\n",
             sizeof sites / sizeof *sites);
 }

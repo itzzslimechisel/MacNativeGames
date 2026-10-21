@@ -245,6 +245,15 @@ export PATH=\"/usr/bin:$(cygpath -u '${_cc_dir}'):$PATH\"
     endif()
   endif()
   string(TOUPPER ${TOTK_GAME_VERSION} TOTK_GAME_VERSION_UPPER)
+  # Per-version game-code patches (game_version.h holds the address tables): 1.4.3 has its own file, 1.0.0 / 1.1.2 /
+  # 1.2.1 (and the Windows-only 1.1.1 / 1.2.0) share game_patches.c. TOTK_GAME_VERSION = v0 | v111 | v112 | v120 | v121 | v143.
+  if(TOTK_GAME_VERSION STREQUAL "v143")
+    set(TOTK_GAME_PATCHES ${RUNTIME_DIR}/game_patches_v143.c)
+  elseif(TOTK_GAME_VERSION MATCHES "^v(0|111|112|120|121)$")
+    set(TOTK_GAME_PATCHES ${RUNTIME_DIR}/game_patches.c)
+  else()
+    message(FATAL_ERROR "TOTK_GAME_VERSION=${TOTK_GAME_VERSION}: supported are v0, v111, v112, v120, v121, v143")
+  endif()
   # NVN layer (hle_nvn.c) with the null mtl_* backend (nvn_null.c); host-trap signatures of the NVN entries generated
   # from nvn_protos.h (tools/windows/gen_nvn_traps.py).
   set(GFX_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/d2r_gfx/gfx)
@@ -260,7 +269,7 @@ export PATH=\"/usr/bin:$(cygpath -u '${_cc_dir}'):$PATH\"
     ${RUNTIME_DIR}/applet_host.c ${RUNTIME_DIR}/swkbd_host.c ${RUNTIME_DIR}/input.c ${RUNTIME_DIR}/hid_feedback.c
     ${RUNTIME_DIR}/motion_fusion.c ${RUNTIME_DIR}/autoload.c
     ${RUNTIME_DIR}/audio_renderer.c ${RUNTIME_DIR}/audio_mixer.c ${RUNTIME_DIR}/audio_effects.c ${RUNTIME_DIR}/audio_reverb.c
-    ${RUNTIME_DIR}/game_patches_v143.c ${RUNTIME_DIR}/world_survey.c
+    ${TOTK_GAME_PATCHES} ${RUNTIME_DIR}/world_survey.c
     ${RUNTIME_DIR}/gfx_bridge_win.c ${RUNTIME_DIR}/win/win_sections.c ${RUNTIME_DIR}/opus_codec.c
     ${GFX_DIR}/nvn/hle_nvn.c ${GFX_DIR}/nvn/nvn_jit.c ${GFX_DIR}/nvn/nvn_null.c ${GFX_DIR}/nvn/nvn_tex.c
     ${GFX_DIR}/nvn/nvn_dirty.c ${GFX_DIR}/nvn/totk_vpool_win.c ${GFX_DIR}/nvn/totk_nvn_ext.c ${GFX_DIR}/nvn/totk_timeline.c
