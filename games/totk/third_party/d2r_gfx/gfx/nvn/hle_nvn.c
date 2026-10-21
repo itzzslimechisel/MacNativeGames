@@ -103,11 +103,19 @@ void *runtime_hle_wrap(void *fn);   // runtime/hle_stack.c: run on the calling g
 void *runtime_hle_wrap_named(void *fn, const char *name);   // the same, with the NVN name for diagnostics (hletrace)
 static void *nvn_lookup(const char *name) {
     nvn_init_slots();
+#ifdef TOTK_CPU_JIT   /* nvn_jit.c: host traps instead of the ARM64 thunks */
+    void *nvn_jit_entry(unsigned i), *nvn_jit_extra(void *fn, const char *name);
+#define NVN_ENTRY(i) nvn_jit_entry(i)
+#define NVN_EXTRA_ENTRY(fn, name) nvn_jit_extra((fn), (name))
+#else
+#define NVN_ENTRY(i) nvn_thunk[i]
+#define NVN_EXTRA_ENTRY(fn, name) (fn)
+#endif
     for (unsigned i = 0; i < NVN_NFUNC; i++)
-        if (!strcmp(nvn_names[i], name)) return nvn_thunk[i];
+        if (!strcmp(nvn_names[i], name)) return NVN_ENTRY(i);
     unsigned long sz = 0;
     const nvn_impl *ex = (const nvn_impl *)getsectiondata(&_mh_execute_header, "__DATA", "totknvnx", &sz);
-    for (unsigned k = 0; ex && name && k < sz / sizeof *ex; k++) if (!strcmp(ex[k].name, name)) return ex[k].fn;
+    for (unsigned k = 0; ex && name && k < sz / sizeof *ex; k++) if (!strcmp(ex[k].name, name)) return NVN_EXTRA_ENTRY(ex[k].fn, name);
     LOG("【红】NVN 取址未知名字：%s（未实现：若被调用会跳到空地址）", name ? name : "(null)");
     return NULL;
 }
@@ -993,9 +1001,14 @@ static sigjmp_buf *g_mark_jb;   /* only the replay thread walks copies (g_copy_m
 static int copy_token_intact(const cmd_copy *c) {
     if (copy_token_negative()) return 1;
     uint64_t v[2];
+#ifdef _WIN32   /* no signal longjmp on Windows: a guarded read (host_fault.h); unmapped control memory = mark gone */
+    size_t host_guarded_read(void *dst, const void *src, size_t n);
+    if (host_guarded_read(v, (const void *)c->ctl_lo, sizeof v) != sizeof v) { g_copy_mark_faults++; return 0; }
+#else
     runtime_fault_guard = g_mark_jb;
     memcpy(v, (const void *)c->ctl_lo, sizeof v);
     runtime_fault_guard = NULL;
+#endif
     return v[0] == COPY_TOKEN_MAGIC && v[1] == (uint64_t)(uintptr_t)c->copy;
 }
 /* Drop the buckets whose copies are all gone (g_copy_mu held, between sweep windows: the walk keeps bucket positions). */

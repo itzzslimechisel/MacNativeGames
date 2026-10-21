@@ -46,7 +46,7 @@ static class ShaderService
     };
     static readonly Regex Fp64 = new(@"\bdouble\b|unsupported_GLSLstd450(?:Pack|Unpack)Double2x32");
 
-    static string spirvCross, outDir, chain;
+    static string spirvCross, outDir, chain, target = "msl";
     static int debugMode;
 
     // ---- small helpers with Python's meaning ----
@@ -377,6 +377,171 @@ static class ShaderService
         File.Move(tmp, Path.Combine(outDir, variant + "_b.json"), true);
     }
 
+    // ---- SPIR-V chain (Windows / Vulkan, docs/windows-port-plan.md C10): --target spirv ----
+    // Same request line as the MSL chain plus optional "caps" (host capabilities, Program.cs Accessor). No SPIRV-Cross: the
+    // translator's SPIR-V is the shader, and the reflection is read from the SPIR-V itself (SpirvReflect.cs) together with
+    // the translator's ShaderProgramInfo (<key>.res.json). Outputs <variant>_v.spv and <variant>_v.json.
+    // Bindings: {name, set, binding, desc, count, kind, reg, ...}; desc is the Vulkan descriptor type: ubo, ssbo, combined
+    // (combined image sampler), sampled (separate sampled image), sampler, storage (storage image), utexel / stexel
+    // (uniform / storage texel buffer). kind / reg / bank / off / rw have the MSL chain's meaning (nvn_refl.h kinds).
+    static string DescOf(SpirvModule m, SpirvModule.Var v, out int count, out JsonObject img)
+    {
+        img = null;
+        uint ty = m.Elem(v.Pointee, out count);
+        SpirvModule.Ty t = m.Type(ty);
+        if (t == null) return "?";
+        if (v.StorageClass == 12) return "ssbo";                                  // StorageBuffer
+        if (v.StorageClass == 2) return m.HasDeco(ty, 3) ? "ssbo" : "ubo";        // Uniform: BufferBlock = storage buffer
+        if (v.StorageClass != 0) return "?";                                      // UniformConstant below
+        if (t.Op == 26) return "sampler";
+        bool combined = t.Op == 27;
+        SpirvModule.Ty it = combined ? m.Type(t.W[1]) : t;
+        if (it == null || it.Op != 25) return "?";
+        // OpTypeImage: result, sampled type, dim, depth, arrayed, ms, sampled, format
+        int dim = (int)it.W[2], sampled = (int)it.W[6];
+        img = new JsonObject
+        {
+            ["dim"] = dim switch { 0 => "1d", 1 => "2d", 2 => "3d", 3 => "cube", 5 => "buffer", _ => dim.ToString(CultureInfo.InvariantCulture) },
+            ["arrayed"] = it.W[4] != 0, ["ms"] = it.W[5] != 0, ["shadow"] = it.W[3] == 1, ["class"] = m.ScalarClass(it.W[1]), ["format"] = (int)it.W[7],
+        };
+        if (dim == 5) return sampled == 2 ? "stexel" : "utexel";
+        if (combined) return "combined";
+        return sampled == 2 ? "storage" : "sampled";
+    }
+
+    static void HandleSpirv(JsonObject rq)
+    {
+        string variant = (string)rq["variant"], stage = (string)rq["stage"];
+        if (stage != "vs" && stage != "ps" && stage != "cs") throw new RuntimeError($"stage {stage} not supported by the translation chain");
+        if (stage == "cs" && !Truthy(Get(rq, "local"))) throw new RuntimeError("compute shader without thread group size");
+        string key = variant + "_v";
+        var job = new JsonObject
+        {
+            ["key"] = key, ["stage"] = stage, ["code"] = (string)rq["code"], ["c1"] = GetStr(rq, "c1", ""), ["debug"] = debugMode != 0, ["reduced"] = true,
+            ["tex"] = GetObj(rq, "tex").DeepClone(), ["img"] = GetObj(rq, "img").DeepClone(), ["attr"] = GetObj(rq, "attr").DeepClone(), ["fout"] = GetObj(rq, "fout").DeepClone(),
+            ["set"] = stage == "ps" ? 1 : 0, ["caps"] = GetObj(rq, "caps").DeepClone(),
+        };
+        if (Truthy(Get(rq, "local"))) job["local"] = rq["local"].DeepClone();
+        job["depth_minus_w"] = Truthy(Get(rq, "depth_minus_w"));
+        Translate(job);
+        JsonObject res = ReadRes(key);
+        string spvPath = Path.Combine(outDir, key + ".spv");
+        var m = new SpirvModule(File.ReadAllBytes(spvPath));
+        JsonObject caps = GetObj(rq, "caps");
+        if (m.UsesFp64 && caps["float64"] is JsonValue fv && fv.TryGetValue<bool>(out bool f64) && !f64)
+            throw new RuntimeError("translator emitted FP64 although the host has no shaderFloat64");
+
+        List<JsonObject> sbSorted = res["sbufs"].AsArray().Select(b => b.AsObject()).OrderBy(b => Long(b["binding"])).ToList();
+        long? sbBase = stage switch { "vs" => 0x110, "cs" => 0x310, "ps" => 0x510, _ => null };
+        var binds = new List<JsonObject>();
+        var drv = new Dictionary<int, (SortedSet<long> offs, bool dyn)>();
+        var usedSlots = new HashSet<long>();
+        foreach (SpirvModule.Var v in m.Vars.Values.OrderBy(x => x.Set).ThenBy(x => x.Binding))
+        {
+            if (v.Binding < 0 || (v.StorageClass != 0 && v.StorageClass != 2 && v.StorageClass != 12)) continue;
+            string nm = v.Name, desc = DescOf(m, v, out int count, out JsonObject img);
+            var e = new JsonObject { ["name"] = nm, ["set"] = v.Set < 0 ? 0 : v.Set, ["binding"] = v.Binding, ["desc"] = desc, ["count"] = count };
+            if (img != null) foreach (var kv in img) e[kv.Key] = kv.Value.DeepClone();
+            Match fm;
+            if (nm == "support_buffer") e["kind"] = "support";
+            else if ((fm = Regex.Match(nm, @"^[a-z]+_c(\d+)\z")).Success)
+            {
+                long n = ParseInt(fm.Groups[1].Value);
+                if (3 <= n && n <= 16) { e["kind"] = "cbuf"; e["reg"] = n - 3; }
+                else
+                {
+                    e["kind"] = n == 1 ? "c1" : "drvcb"; e["bank"] = n;
+                    if (n == 0 || n == 2)
+                    {
+                        var offs = new SortedSet<long>(); bool dyn = false, any = false;
+                        foreach (var (root, idx) in m.Chains)
+                        {
+                            if (root != v.Id) continue;
+                            any = true;
+                            if (idx.Length >= 2 && m.Consts.TryGetValue(idx[0], out uint mem) && mem == 0 && m.Consts.TryGetValue(idx[1], out uint k)) offs.Add(k * 16L);
+                            else dyn = true;
+                        }
+                        if (any) drv[(int)n] = (offs, dyn);
+                    }
+                }
+            }
+            else if ((fm = Regex.Match(nm, @"^[a-z]+_s(\d+)\z")).Success && (desc == "ssbo"))
+            {
+                e["kind"] = "sbuf";
+                long index = ParseInt(fm.Groups[1].Value);
+                JsonObject b = index < sbSorted.Count ? sbSorted[(int)index] : null;
+                long cbSlot = b != null ? Long(b["cb_slot"]) : 0, cbOffset = b != null ? Long(b["cb_offset"]) : 0;
+                long? off = b != null && cbSlot == 0 ? cbOffset * 4 : null;
+                if (stage == "cs" && off != null && 0x210 <= off && off < 0x310 && (off - 0x210) % 16 == 0) { e["kind"] = "ubo_ptr"; e["reg"] = (off - 0x210) / 16; }
+                else if (b != null && cbSlot != 0 && 3 <= cbSlot && cbSlot <= 16) { e["kind"] = "sbuf_ubo"; e["reg"] = cbSlot - 3; e["off"] = cbOffset * 4; }
+                else e["reg"] = off != null && sbBase != null && 0 <= off - sbBase && off - sbBase < 0x100 && (off - sbBase) % 16 == 0 ? Num((off - sbBase) / 16) : null;
+                e["rw"] = (b != null && (Long(b["flags"]) & 1) != 0) || v.Stored;
+            }
+            else
+            {
+                var d = DecodeTex(nm) ?? (desc == "sampler" ? DecodeTex(Regex.Replace(nm, @"^([a-z]+)_s", "$1_t")) : null);
+                if (d == null) e["kind"] = "?";
+                else if (desc == "sampler") { if (d.Value.ty != 0) { e["kind"] = "samp"; e["reg"] = Num(d.Value.s); } else { e["kind"] = "samp_tex"; e["reg"] = Num(d.Value.t); } }
+                else
+                {
+                    bool isImg = Regex.IsMatch(nm, @"^[a-z]+_i");
+                    e["kind"] = isImg ? "img" : (desc == "utexel" ? "tbuf" : "tex"); e["reg"] = Num(d.Value.t);
+                    if (isImg) e["rw"] = v.Stored;
+                    if (desc == "combined")
+                    {   // the sampler of a combined image sampler: a separate handle's sampler slot, or the combined handle's sampler part
+                        if (d.Value.ty != 0) { e["samp_kind"] = "samp"; e["samp_reg"] = Num(d.Value.s); }
+                        else { e["samp_kind"] = "samp_tex"; e["samp_reg"] = Num(d.Value.t); }
+                    }
+                    if (!isImg && d.Value.t is long ts) usedSlots.Add(ts);
+                }
+            }
+            binds.Add(e);
+        }
+        var dr = new JsonObject();
+        foreach (var kv in drv.OrderBy(k => k.Key))
+            dr[kv.Key.ToString(CultureInfo.InvariantCulture)] = new JsonObject { ["vec4_offsets"] = new JsonArray(kv.Value.offs.Select(o => (JsonNode)o).ToArray()), ["dynamic"] = kv.Value.dyn };
+        JsonArray unfillable = Unfillable(dr, stage);
+
+        var vertexInputs = new JsonArray(); var colors = new SortedSet<long>(); bool writesDepth = false;
+        foreach (SpirvModule.Var v in m.Vars.Values.OrderBy(x => x.Location))
+        {
+            if (stage == "vs" && v.StorageClass == 1 && v.Location >= 0 && v.BuiltIn < 0)
+                vertexInputs.Add((JsonNode)new JsonObject { ["location"] = (long)v.Location, ["type"] = m.ScalarClass(m.Elem(v.Pointee, out _)) });
+            if (stage == "ps" && v.StorageClass == 3)
+            {
+                if (v.Location >= 0 && v.BuiltIn < 0) colors.Add(v.Location);
+                if (v.BuiltIn == 22) writesDepth = true;   // FragDepth
+            }
+        }
+        JsonObject tex = GetObj(rq, "tex"), imgs = GetObj(rq, "img"), attr = GetObj(rq, "attr"), fout = GetObj(rq, "fout");
+        var deps = new JsonObject { ["tex"] = new JsonObject(), ["img"] = new JsonObject(), ["attr"] = new JsonObject(), ["fout"] = new JsonObject() };
+        IEnumerable<long> Ints(string k) => res.TryGetPropertyValue(k, out JsonNode a) && a is JsonArray arr ? arr.Select(Long) : Enumerable.Empty<long>();
+        foreach (long s in new SortedSet<long>(Ints("tex_queried").Concat(usedSlots)))
+            deps["tex"][s.ToString(CultureInfo.InvariantCulture)] = GetOr(tex, s.ToString(CultureInfo.InvariantCulture), "2d");
+        foreach (long s in Ints("img_queried"))
+            deps["img"][s.ToString(CultureInfo.InvariantCulture)] = GetOr(imgs, s.ToString(CultureInfo.InvariantCulture), new JsonObject());
+        if (stage == "vs")
+            foreach (JsonNode v in vertexInputs) { string loc = Long(v["location"]).ToString(CultureInfo.InvariantCulture); deps["attr"][loc] = GetOr(attr, loc, "float"); }
+        if (stage == "ps")
+            foreach (long c in colors) { string k = c.ToString(CultureInfo.InvariantCulture); deps["fout"][k] = GetOr(fout, k, "float"); }
+        var refl = new JsonObject
+        {
+            ["key"] = key, ["route"] = "B", ["target"] = "spirv", ["chain"] = chain, ["stage"] = stage,
+            ["entry"] = m.EntryName, ["set"] = stage == "ps" ? 1 : 0,
+            ["threadgroup_size"] = m.LocalSize != null ? new JsonArray(m.LocalSize.Select(x => (JsonNode)x).ToArray()) : GetOr(rq, "local", null),
+            ["c1"] = GetStr(rq, "c1", ""), ["notes"] = res["notes"].DeepClone(),
+            ["drv_reads"] = dr, ["drv_unfillable"] = unfillable, ["bindings"] = new JsonArray(binds.Select(x => (JsonNode)x).ToArray()),
+            ["vertex_inputs"] = vertexInputs, ["frag_outputs"] = new JsonArray(colors.Select(c => (JsonNode)c).ToArray()),
+            ["writes_depth"] = writesDepth, ["uses_fp64"] = m.UsesFp64, ["uses_frag_coord"] = res["uses_frag_coord"]?.DeepClone(),
+            ["capabilities"] = new JsonArray(m.Capabilities.Select(c => (JsonNode)c).ToArray()),
+            ["extensions"] = new JsonArray(m.Extensions.Select(x => (JsonNode)x).ToArray()),
+            ["raster"] = new JsonObject(), ["deps"] = deps,
+        };
+        string tmp = Path.Combine(outDir, key + ".json.tmp");
+        File.WriteAllText(tmp, PyJson(refl, 1, false));
+        File.Move(tmp, Path.Combine(outDir, key + ".json"), true);
+    }
+
     // ---- JSON text as Python's json.dump writes it (indent >= 0: indented, < 0: one line; ascii: ensure_ascii) ----
     static string PyJson(JsonNode n, int indent, bool ascii) { var sb = new StringBuilder(); PyJson(sb, n, indent, ascii, 0); return sb.ToString(); }
     static void PyJson(StringBuilder sb, JsonNode n, int indent, bool ascii, int level)
@@ -460,15 +625,19 @@ static class ShaderService
                 case "--out": outDir = v; i++; break;
                 case "--chain": chain = v; i++; break;
                 case "--debug-mode": debugMode = (int)ParseInt(v); i++; break;
+                case "--target": target = v; i++; break;
                 default: Console.Error.WriteLine($"totk_xlate --service: unknown argument {args[i]}"); return 2;
             }
         }
-        if (spirvCross == null || outDir == null || chain == null)
+        if ((target != "msl" && target != "spirv") || (target == "msl" && spirvCross == null) || outDir == null || chain == null)
         {
-            Console.Error.WriteLine("usage: totk_xlate --service --spirv-cross <path> --out <dir> --chain <name> [--debug-mode 0|1]");
+            Console.Error.WriteLine("usage: totk_xlate --service [--target msl] --spirv-cross <path> --out <dir> --chain <name> [--debug-mode 0|1]\n" +
+                                    "       totk_xlate --service --target spirv --out <dir> --chain <name> [--debug-mode 0|1]");
             return 2;
         }
         Directory.CreateDirectory(outDir);
+        // Vulkan limit maxCombinedClipAndCullDistances = 8 (patches/0006): read by the translator on first use
+        if (target == "spirv") Environment.SetEnvironmentVariable("TOTK_XLATE_CLIP_DISTANCES", "7");
         var stdout = Console.Out;
         string line;
         while ((line = Console.In.ReadLine()) != null)
@@ -477,7 +646,7 @@ static class ShaderService
             string reply;
             try
             {
-                Handle(JsonNode.Parse(line).AsObject());
+                if (target == "spirv") HandleSpirv(JsonNode.Parse(line).AsObject()); else Handle(JsonNode.Parse(line).AsObject());
                 reply = "{\"ok\": true}";
             }
             catch (Exception e)   // reported to the host, which stops with the message

@@ -1,0 +1,61 @@
+{
+ "key": "test_vs_v",
+ "route": "B",
+ "target": "spirv",
+ "chain": "test",
+ "stage": "vs",
+ "entry": "main",
+ "set": 0,
+ "threadgroup_size": null,
+ "c1": "",
+ "notes": [],
+ "drv_reads": {},
+ "drv_unfillable": [],
+ "bindings": [
+  {
+   "name": "support_buffer",
+   "set": 0,
+   "binding": 0,
+   "desc": "ubo",
+   "count": 1,
+   "kind": "support"
+  }
+ ],
+ "vertex_inputs": [
+  {
+   "location": 0,
+   "type": "float"
+  },
+  {
+   "location": 1,
+   "type": "float"
+  }
+ ],
+ "frag_outputs": [],
+ "writes_depth": false,
+ "uses_fp64": false,
+ "uses_frag_coord": false,
+ "capabilities": [
+  1,
+  64,
+  65,
+  62,
+  47,
+  25,
+  50,
+  46,
+  10,
+  4427
+ ],
+ "extensions": [],
+ "raster": {},
+ "deps": {
+  "tex": {},
+  "img": {},
+  "attr": {
+   "0": "float",
+   "1": "float"
+  },
+  "fout": {}
+ }
+}

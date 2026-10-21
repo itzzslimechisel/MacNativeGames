@@ -1,0 +1,74 @@
+{
+ "key": "test_ps_v",
+ "route": "B",
+ "target": "spirv",
+ "chain": "test",
+ "stage": "ps",
+ "entry": "main",
+ "set": 1,
+ "threadgroup_size": null,
+ "c1": "",
+ "notes": [],
+ "drv_reads": {},
+ "drv_unfillable": [],
+ "bindings": [
+  {
+   "name": "support_buffer",
+   "set": 0,
+   "binding": 0,
+   "desc": "ubo",
+   "count": 1,
+   "kind": "support"
+  },
+  {
+   "name": "fp_t_tcb_8",
+   "set": 1,
+   "binding": 1,
+   "desc": "combined",
+   "count": 1,
+   "dim": "2d",
+   "arrayed": false,
+   "ms": false,
+   "shadow": false,
+   "class": "float",
+   "format": 0,
+   "kind": "tex",
+   "reg": 0,
+   "samp_kind": "samp_tex",
+   "samp_reg": 0
+  }
+ ],
+ "vertex_inputs": [],
+ "frag_outputs": [
+  0
+ ],
+ "writes_depth": false,
+ "uses_fp64": false,
+ "uses_frag_coord": false,
+ "capabilities": [
+  1,
+  64,
+  65,
+  62,
+  47,
+  25,
+  50,
+  46,
+  10,
+  5378
+ ],
+ "extensions": [
+  "SPV_EXT_fragment_shader_interlock"
+ ],
+ "raster": {},
+ "deps": {
+  "tex": {
+   "0": "2d"
+  },
+  "img": {},
+  "attr": {},
+  "fout": {
+   "0": "float"
+  }
+ }
+}

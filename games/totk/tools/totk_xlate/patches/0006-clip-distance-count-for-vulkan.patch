@@ -1,0 +1,21 @@
+--- a/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Declarations.cs
++++ b/src/Ryujinx.Graphics.Shader/CodeGen/Spirv/Declarations.cs
+@@ -447,11 +447,17 @@
+             }
+         }
+
++        // TOTK (Windows port, Vulkan): gl_PerVertex declares ClipDistance[8] + CullDistance[1] = 9, above the
++        // maxCombinedClipAndCullDistances of 8 that NVIDIA / AMD / Intel report (validation error
++        // VUID-RuntimeSpirv-maxCombinedClipAndCullDistances-00710). The SPIR-V chain (totk_xlate --target spirv)
++        // sets TOTK_XLATE_CLIP_DISTANCES=7; the MSL chain keeps 8, so its output is unchanged.
++        private static readonly int ClipDistanceCount = int.TryParse(System.Environment.GetEnvironmentVariable("TOTK_XLATE_CLIP_DISTANCES"), out int n) && n is >= 1 and <= 8 ? n : 8;
++
+         private static SpvInstruction CreatePerVertexStructType(CodeGenContext context)
+         {
+             SpvInstruction vec4FloatType = context.TypeVector(context.TypeFP32(), 4);
+             SpvInstruction floatType = context.TypeFP32();
+-            SpvInstruction array8FloatType = context.TypeArray(context.TypeFP32(), context.Constant(context.TypeU32(), 8));
++            SpvInstruction array8FloatType = context.TypeArray(context.TypeFP32(), context.Constant(context.TypeU32(), ClipDistanceCount));
+             SpvInstruction array1FloatType = context.TypeArray(context.TypeFP32(), context.Constant(context.TypeU32(), 1));
+
+             SpvInstruction perVertexStructType = context.TypeStruct(true, vec4FloatType, floatType, array8FloatType, array1FloatType);

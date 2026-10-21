@@ -1,0 +1,52 @@
+{
+ "key": "test_cs_v",
+ "route": "B",
+ "target": "spirv",
+ "chain": "test",
+ "stage": "cs",
+ "entry": "main",
+ "set": 0,
+ "threadgroup_size": [
+  64,
+  1,
+  1
+ ],
+ "c1": "",
+ "notes": [],
+ "drv_reads": {},
+ "drv_unfillable": [],
+ "bindings": [
+  {
+   "name": "support_buffer",
+   "set": 0,
+   "binding": 0,
+   "desc": "ubo",
+   "count": 1,
+   "kind": "support"
+  }
+ ],
+ "vertex_inputs": [],
+ "frag_outputs": [],
+ "writes_depth": false,
+ "uses_fp64": false,
+ "uses_frag_coord": false,
+ "capabilities": [
+  1,
+  64,
+  65,
+  62,
+  47,
+  25,
+  50,
+  46,
+  10
+ ],
+ "extensions": [],
+ "raster": {},
+ "deps": {
+  "tex": {},
+  "img": {},
+  "attr": {},
+  "fout": {}
+ }
+}
