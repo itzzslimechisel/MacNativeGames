@@ -785,6 +785,8 @@ def clonefile(src, dst):
     program for it (an app holds about 50,000 shader files per version: one cp each took minutes, 2026-10-19). False
     when it cannot: another volume or file system, or dst exists."""
     global _libc
+    if sys.platform != 'darwin':   # clonefile(2) is macOS-only; callers fall back to a copy
+        return False
     if _libc is None:
         import ctypes
         _libc = ctypes.CDLL(None, use_errno=True)
