@@ -194,7 +194,7 @@ static void patch_slowmo_bounce(Module *m){
 #endif
     fprintf(stderr,"[totk] 1.4.3 high-FPS fix: trampoline slow-motion check uses the time scale, veneer +%#llx\n",(unsigned long long)stub);
 }
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(_WIN32)   /* Mach debug-state watchpoints */
 /* High-frame-rate diagnostics (Mac, TOTK_INPUT_FILE commands). Such bugs sit in game code that compares the game's time
    values with constants tuned for 30 Hz (#61: X+0x28 > 100 above). The time values: the FrameRateMgr singleton
    (main+0x3ada848; +0x10 30 Hz ratio, +0x18 seconds, +0x1c integer FPS) and the time object X = [[main+0x3ad27c8]+0xc8]
@@ -264,7 +264,7 @@ void runtime_game_patches(Module *m) {
     patch_output_res(m);
     patch_render_res(m);
     patch_slowmo_bounce(m);
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(_WIN32)
     diag_main=m;   /* frmwatch / xpoke */
 #endif
     { static const uint64_t sites[] = {0x628c74, 0xb43460, 0x1ff04f4, 0x253fbb0};   /* camera update and setup, viewport x2 */

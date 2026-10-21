@@ -4,6 +4,9 @@
    or queues a next transform, unlike merely changing the actor's displayed position.
    Only called after the actual game frame-end GPU wait, never from the input file thread. */
 #include "world_survey.h"
+#ifdef _WIN32
+#define realpath(p, out) _fullpath((out), (p), PATH_MAX)
+#endif
 #include "game_version.h"
 #include <ctype.h>
 #include <limits.h>

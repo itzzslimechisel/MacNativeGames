@@ -54,6 +54,12 @@ int runtime_module_query(uint64_t address,uint64_t *base,uint64_t *size,unsigned
 void runtime_oe_push_message(uint32_t message);
 void hle_bind_system_event(void *event, int autoclear);
 uint64_t runtime_svc(unsigned num, uint64_t *regs, const char *module, uint64_t offset);
+#ifdef TOTK_CPU_JIT
+/* JIT builds (x86-64, runtime/jit_glue.c): guest code cannot be called as a host function pointer. Calls guest fn with
+   n (<= 8) uint64_t arguments on the calling thread's CPU context and returns x0. Native builds call guest code directly. */
+uint64_t runtime_guest_call(const void *fn, unsigned n, ...);
+void runtime_main_stack(uint64_t *lo, uint64_t *size);   /* loader_win.c: the main guest thread's stack (QueryMemory) */
+#endif
 void runtime_gate(void);
 void runtime_thread_init(void);
 void runtime_dispatch(uint64_t ret, uint64_t *regs);
@@ -77,6 +83,9 @@ int runtime_gfx_fault(void *addr,int is_write,void *context);
 /* A thread that reads guest memory it does not own (uniform snapshot copies) sets this around the read: a SIGBUS / SIGSEGV
    on that thread then returns 1 from sigsetjmp instead of taking the process down (loader.c signal handler). */
 #include <setjmp.h>
+#ifdef _WIN32
+typedef jmp_buf sigjmp_buf;   /* Windows has no sigjmp_buf: placeholder so shared code compiles until C5 replaces this guard with host_fault.h */
+#endif
 extern __thread sigjmp_buf *runtime_fault_guard;
 void dm_guest_write_prepare(void *addr,size_t n);
 

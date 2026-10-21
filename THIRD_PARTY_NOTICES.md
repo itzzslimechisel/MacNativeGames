@@ -19,5 +19,7 @@ Fetched or linked at build time (not in this repository):
 |---|---|---|
 | [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) at `aa217ae` | SPIR-V to Metal Shading Language | Apache-2.0 |
 | [hactool](https://github.com/SciresM/hactool) at `1d64a83` (with explicit private title-key-file hook), including its bundled mbedTLS | Base + update BKTR merge at build time only | ISC (hactool), Apache-2.0 (mbedTLS); see fetched source LICENSE files |
-| libopus (Homebrew), linked statically | Opus audio | BSD-3-Clause |
-| libvpx (Homebrew), linked statically | VP9 movies | BSD-3-Clause |
+| [dynarmic](https://github.com/azahar-emu/dynarmic) (azahar-emu fork, maintained) at `a46601580d5512d324104f985b5f0209dc980ddc`, with its bundled submodules (mcl, fmt, xbyak, zydis/zycore, robin-map) | Windows x86-64 CPU backend (A64 JIT), FetchContent in `games/totk/CMakeLists.txt` | 0BSD (dynarmic); MIT (mcl, fmt, zydis, zycore, robin-map); BSD-3-Clause (xbyak) |
+| [Boost](https://www.boost.org) 1.86.0 headers (`boost-1.86.0-b2-nodocs.tar.xz`, SHA-256 `a4d99d03...f51d`) | header-only dependency of dynarmic (icl, variant) | BSL-1.0 |
+| libopus (Homebrew on macOS; [opus 1.5.2](https://opus-codec.org) source, SHA-256 `65c1d2f7...7ce1`, FetchContent on Windows), linked statically | Opus audio | BSD-3-Clause |
+| libvpx (Homebrew on macOS; [libvpx v1.14.1](https://chromium.googlesource.com/webm/libvpx) source, SHA-256 `90174725...7977`, built by `games/totk/CMakeLists.txt` on Windows), linked statically | VP9 movies | BSD-3-Clause |

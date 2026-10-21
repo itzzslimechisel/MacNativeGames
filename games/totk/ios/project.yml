@@ -17,6 +17,11 @@ targets:
           - frontend.m
           - loader.c
           - game_patches_botw.c
+          - "*_win.c"            # Windows port (docs/windows-port-plan.md C8 / C9)
+          - "platform/*_win.c"
+          - gamepad_sdl.c
+          - gamepad_feedback_sdl.c
+          - audio_out_wasapi.c
       - path: ../third_party/d2r_gfx/gfx/nvn
       - path: ../third_party/d2r_gfx/gfx/tex
       - path: Gen/embed.S

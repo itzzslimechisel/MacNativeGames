@@ -24,7 +24,9 @@
    over as soon as it is decoded. */
 #include "runtime.h"
 #include "movie_host.h"
+#if defined(__aarch64__)
 #include <arm_neon.h>
+#endif
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -102,9 +104,50 @@ static void need_symbol(void **slot, const char *name) {
     *slot = runtime_symbol(name);
     if (!*slot) { fprintf(stderr, "[movie] missing guest symbol %s\n", name); runtime_fail("movie decoder: guest symbol missing"); }
 }
+#ifdef TOTK_CPU_JIT
+/* JIT build (x86-64): guest functions cannot be called as host function pointers, so G holds host wrappers that run them
+   through runtime_guest_call; J keeps their guest addresses. Decoders left to the library forward all six integer
+   arguments of the longest entry (SendInputBufferForDecode). */
+static struct { void *signal_event, *buf_set_range, *buf_set_data, *buf_base, *buf_capacity, *md_find_int32, *md_find_string,
+                *md_set_int32, *md_set_rect, *md_set_string, *orig[MOVIE_ENTRIES]; } J;
+#define U(x) ((uint64_t)(uintptr_t)(x))
+#define I(x) ((uint64_t)(int64_t)(x))
+static void j_signal_event(void *e) { runtime_guest_call(J.signal_event, 1, U(e)); }
+static void j_buf_set_range(void *b, int o, int n) { runtime_guest_call(J.buf_set_range, 3, U(b), I(o), I(n)); }
+static void j_buf_set_data(void *b, void *d, size_t c) { runtime_guest_call(J.buf_set_data, 3, U(b), U(d), (uint64_t)c); }
+static void *j_buf_base(const void *b) { return (void *)(uintptr_t)runtime_guest_call(J.buf_base, 1, U(b)); }
+static size_t j_buf_capacity(const void *b) { return (size_t)runtime_guest_call(J.buf_capacity, 1, U(b)); }
+static bool j_md_find_int32(const void *m, const char *k, int *v) { return (runtime_guest_call(J.md_find_int32, 3, U(m), U(k), U(v)) & 0xff) != 0; }
+static bool j_md_find_string(const void *m, const char *k, const char **v) { return (runtime_guest_call(J.md_find_string, 3, U(m), U(k), U(v)) & 0xff) != 0; }
+static void j_md_set_int32(void *m, const char *k, int v) { runtime_guest_call(J.md_set_int32, 3, U(m), U(k), I(v)); }
+static void j_md_set_rect(void *m, const char *k, int l, int t, int r, int b) { runtime_guest_call(J.md_set_rect, 6, U(m), U(k), I(l), I(t), I(r), I(b)); }
+static void j_md_set_string(void *m, const char *k, const char *v) { runtime_guest_call(J.md_set_string, 3, U(m), U(k), U(v)); }
+#define FWD(i) static uint64_t fwd_##i(uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e, uint64_t f) { return runtime_guest_call(J.orig[i], 6, a, b, c, d, e, f); }
+FWD(0) FWD(1) FWD(2) FWD(3) FWD(4) FWD(5) FWD(6) FWD(7) FWD(8) FWD(9) FWD(10) FWD(11) FWD(12) FWD(13) FWD(14) FWD(15) FWD(16) FWD(17) FWD(18) FWD(19)
+_Static_assert(MOVIE_ENTRIES == 20, "one forwarder per movie::Decoder entry");
+static void *const FWDS[MOVIE_ENTRIES] = {fwd_0, fwd_1, fwd_2, fwd_3, fwd_4, fwd_5, fwd_6, fwd_7, fwd_8, fwd_9, fwd_10, fwd_11, fwd_12,
+                                          fwd_13, fwd_14, fwd_15, fwd_16, fwd_17, fwd_18, fwd_19};
+static void guest_init_jit(void) {
+    need_symbol(&J.signal_event, "_ZN2nn2os11SignalEventEPNS0_9EventTypeE"); G.signal_event = j_signal_event;
+    need_symbol(&J.buf_set_range, "_ZN5movie6Buffer8SetRangeEii"); G.buf_set_range = j_buf_set_range;
+    need_symbol(&J.buf_set_data, "_ZN5movie6Buffer18SetDataAndCapacityEPvm"); G.buf_set_data = j_buf_set_data;
+    need_symbol(&J.buf_base, "_ZNK5movie6Buffer4BaseEv"); G.buf_base = j_buf_base;
+    need_symbol(&J.buf_capacity, "_ZNK5movie6Buffer8CapacityEv"); G.buf_capacity = j_buf_capacity;
+    need_symbol(&J.md_find_int32, "_ZNK5movie9MediaData9FindInt32EPKcPi"); G.md_find_int32 = j_md_find_int32;
+    need_symbol(&J.md_find_string, "_ZNK5movie9MediaData10FindStringEPKcPS2_"); G.md_find_string = j_md_find_string;
+    need_symbol(&J.md_set_int32, "_ZN5movie9MediaData8SetInt32EPKci"); G.md_set_int32 = j_md_set_int32;
+    need_symbol(&J.md_set_rect, "_ZN5movie9MediaData7SetRectEPKciiii"); G.md_set_rect = j_md_set_rect;
+    need_symbol(&J.md_set_string, "_ZN5movie9MediaData9SetStringEPKcS2_"); G.md_set_string = j_md_set_string;
+    void *vt; need_symbol(&vt, "_ZTVN5movie7DecoderE"); G.vptr = (uint8_t *)vt + 0x10;
+    for (int i = 0; i < MOVIE_ENTRIES; i++) { need_symbol(&J.orig[i], NAMES[i]); G.orig[i] = FWDS[i]; }
+}
+#endif
 /* The guest functions are resolved the first time any entry runs (the modules are loaded and relocated by then). */
 static void guest_init(void) {
     pthread_mutex_lock(&g_lock);
+#ifdef TOTK_CPU_JIT
+    if (!g_ready) { guest_init_jit(); g_ready = 1; }
+#endif
     if (!g_ready) {
         need_symbol((void **)&G.signal_event, "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
         need_symbol((void **)&G.buf_set_range, "_ZN5movie6Buffer8SetRangeEii");
@@ -148,7 +191,9 @@ static void to_nv12(const vpx_image_t *img, uint8_t *dst, int w, int h) {
         const uint8_t *v = img->planes[VPX_PLANE_V] + (size_t)y * img->stride[VPX_PLANE_V];
         uint8_t *o = uv + (size_t)y * w; int x = 0;
         if (negative() == 1) { const uint8_t *t = u; u = v; v = t; }
+#if defined(__aarch64__)
         for (; x + 16 <= w / 2; x += 16) { uint8x16x2_t p = {{vld1q_u8(u + x), vld1q_u8(v + x)}}; vst2q_u8(o + 2 * x, p); }
+#endif
         for (; x < w / 2; x++) { o[2 * x] = u[x]; o[2 * x + 1] = v[x]; }
     }
 }

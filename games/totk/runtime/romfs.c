@@ -16,6 +16,15 @@
 #include <string.h>
 #include <errno.h>
 #include <stdatomic.h>
+#ifdef _WIN32   /* mingw's struct stat: whole seconds, st_ctime is the creation time, no birth time */
+#define ST_MTIME_TS(s) ((struct timespec){(s)->st_mtime, 0})
+#define ST_CTIME_TS(s) ((struct timespec){(s)->st_ctime, 0})
+#define ST_BIRTH_TS(s) ((struct timespec){(s)->st_ctime, 0})
+#else
+#define ST_MTIME_TS(s) ((s)->st_mtimespec)
+#define ST_CTIME_TS(s) ((s)->st_ctimespec)
+#define ST_BIRTH_TS(s) ((s)->st_birthtimespec)
+#endif
 #define NOT_FOUND 0x202u
 #define UNSUPPORTED 0x6402u
 #define INVALID 0xe402u
@@ -84,9 +93,9 @@ typedef struct {
 static RomfsProof proof_for(const struct stat *s) {
  RomfsProof p={0};memcpy(p.magic,"TOTKRFS-PROOF-1",16);memcpy(p.sha256,ROMFS_IMAGE_SHA256,65);
  p.dev=(uint64_t)s->st_dev;p.ino=(uint64_t)s->st_ino;p.size=(uint64_t)s->st_size;
- p.mtime_sec=s->st_mtimespec.tv_sec;p.mtime_nsec=s->st_mtimespec.tv_nsec;
- p.ctime_sec=s->st_ctimespec.tv_sec;p.ctime_nsec=s->st_ctimespec.tv_nsec;
- p.birth_sec=s->st_birthtimespec.tv_sec;p.birth_nsec=s->st_birthtimespec.tv_nsec;
+ p.mtime_sec=ST_MTIME_TS(s).tv_sec;p.mtime_nsec=ST_MTIME_TS(s).tv_nsec;
+ p.ctime_sec=ST_CTIME_TS(s).tv_sec;p.ctime_nsec=ST_CTIME_TS(s).tv_nsec;
+ p.birth_sec=ST_BIRTH_TS(s).tv_sec;p.birth_nsec=ST_BIRTH_TS(s).tv_nsec;
  return p;
 }
 static int proof_equal(const RomfsProof *a,const RomfsProof *b) {
@@ -179,7 +188,7 @@ static void overlay_load(const char *dir,int required) {
   need(fd>=0&&fstat(fd,&st)==0&&(uint64_t)st.st_size==size,"RomFS overlay file missing or wrong size");sha_range(fd,0,size,sha,name);close(fd);
   hashed+=e.size+size;
   if(noverlay==overlay_cap){overlay_cap=overlay_cap?overlay_cap*2:16;overlays=realloc(overlays,overlay_cap*sizeof(*overlays));need(overlays!=NULL,"RomFS overlay table");}
-  char *copy=strdup(file),*rel=strdup(name);need(copy&&rel,"RomFS overlay path copy");overlays[noverlay++]=(Overlay){i,size,copy,st.st_dev,st.st_ino,st.st_mtimespec,rel};
+  char *copy=strdup(file),*rel=strdup(name);need(copy&&rel,"RomFS overlay path copy");overlays[noverlay++]=(Overlay){i,size,copy,st.st_dev,st.st_ino,ST_MTIME_TS(&st),rel};
   if(noverlay-first<=16)fprintf(stderr,"[totk] RomFS overlay: %s (%llu bytes) %s\n",name,size,add?"is added":"replaces the original");
  }
  fclose(m);
@@ -236,7 +245,9 @@ static void overlay_init(void) {
 void runtime_fs_init(void) {
  if(image_fd>=0)return;
  const char *dir=getenv("TOTK_ROMFS");if(!dir)dir="extracted/" TOTK_GAME_DIR "/romfs";char path[4096];
- need(snprintf(path,sizeof(path),"%s/runtime-index.bin",dir)<(int)sizeof(path),"RomFS path");int fd=open(path,O_RDONLY);need(fd>=0,"RomFS index missing");
+ need(snprintf(path,sizeof(path),"%s/runtime-index.bin",dir)<(int)sizeof(path),"RomFS path");
+ { const char *index=getenv("TOTK_ROMFS_INDEX");   /* the index generated outside the RomFS folder (Windows build) */
+   if(index&&*index)need(snprintf(path,sizeof(path),"%s",index)<(int)sizeof(path),"RomFS index path"); }int fd=open(path,O_RDONLY);need(fd>=0,"RomFS index missing");
  struct stat st;need(fstat(fd,&st)==0&&st.st_size>=24&&st.st_size<128*1024*1024,"RomFS index size");runtime_boot_progress(TOTK_UI("读取资源索引","Reading the data index"),0,0);sha_fd(fd,ROMFS_INDEX_SHA256,0,NULL);
  index_size=(size_t)st.st_size;index_bytes=mmap(NULL,index_size,PROT_READ,MAP_PRIVATE,fd,0);close(fd);need(index_bytes!=MAP_FAILED,"map RomFS index");
  need(!memcmp(index_bytes,"TOTKRFS1",8),"RomFS index format");memcpy(&file_count,index_bytes+8,8);memcpy(&strings_offset,index_bytes+16,8);
@@ -274,7 +285,7 @@ unsigned runtime_romfs_open(uint64_t *out,const char *path,int mode) {
  if(!out||mode!=1)return UNSUPPORTED;const char *p=rom_path(path);if(!p)return NOT_FOUND;uint64_t i=file_index(p);if(i==UINT64_MAX)return NOT_FOUND;
  uint32_t ov=overlay_slot(i);int fd=-1;
  if(ov){const Overlay *o=&overlays[ov-1];fd=open(o->path,O_RDONLY|O_CLOEXEC);struct stat st;
-  if(fd<0||fstat(fd,&st)!=0||(uint64_t)st.st_size!=o->size||st.st_dev!=o->dev||st.st_ino!=o->ino||st.st_mtimespec.tv_sec!=o->mtime.tv_sec||st.st_mtimespec.tv_nsec!=o->mtime.tv_nsec){
+  if(fd<0||fstat(fd,&st)!=0||(uint64_t)st.st_size!=o->size||st.st_dev!=o->dev||st.st_ino!=o->ino||ST_MTIME_TS(&st).tv_sec!=o->mtime.tv_sec||ST_MTIME_TS(&st).tv_nsec!=o->mtime.tv_nsec){
    fprintf(stderr,"[totk] RomFS overlay: %s is missing or changed since the start check\n",o->path);runtime_fail("RomFS overlay file changed while the game ran (restart the game)");}}
  pthread_mutex_lock(&lock);for(unsigned j=1;j<NH;j++)if(!handles[j]){handles[j]=i+1;handle_ovl[j]=ov;handle_fd[j]=fd;*out=0x100000000ULL+j;pthread_mutex_unlock(&lock);return 0;}pthread_mutex_unlock(&lock);runtime_fail("file handle table full");return INVALID;
 }

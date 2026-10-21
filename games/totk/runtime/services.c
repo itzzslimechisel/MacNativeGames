@@ -74,10 +74,15 @@ static uint64_t app_pool(void){static uint64_t v;if(!v){const char *e=getenv("TO
 #else
 #define ASLR_SIZE (GUEST_ADDRESS_LIMIT-(uintptr_t)low_space)
 #endif
+#ifdef _WIN32
+#include "host_mem.h"
+static uint8_t *reserve_fixed(uint64_t at,uint64_t size){return host_mem_reserve((void *)(uintptr_t)at,size,HOST_RESERVE_FIXED);}
+#else
 static uint8_t *reserve_fixed(uint64_t at,uint64_t size){
  mach_vm_address_t a=at;   /* FIXED without OVERWRITE: fails instead of replacing an existing mapping */
  return mach_vm_map(mach_task_self(),&a,size,0,VM_FLAGS_FIXED,MEMORY_OBJECT_NULL,0,FALSE,VM_PROT_NONE,VM_PROT_ALL,VM_INHERIT_DEFAULT)==KERN_SUCCESS?(uint8_t *)(uintptr_t)a:NULL;
 }
+#endif
 #if TARGET_OS_IPHONE
 #define GUEST_ALIGN (2ULL<<20)
 /* Reserve size bytes in the lowest free gap of this process's map above 4 GiB (2 MiB aligned). The end of the map is
@@ -112,7 +117,11 @@ static void memory_init(void) {
   /* macOS 27: the shared cache fills 0x1_8000_0000..0xF_C000_0000 and the system reserves ~24 GiB at a random place in
      0x70_0000_0000..2^39, so neither fixed region fits. As on iOS, put stack+heap and the alias region side by side in one
      free hole, shrinking the alias region (the game uses < 3 GiB of it) until it fits. TOTK_ALIAS_GIB pins one size. */
+#ifdef _WIN32
+  if(alias_space)host_mem_release(alias_space,ALIAS_SIZE);
+#else
   if(alias_space)mach_vm_deallocate(mach_task_self(),(mach_vm_address_t)(uintptr_t)alias_space,ALIAS_SIZE);
+#endif
   uint64_t want=alias_requested(),least=getenv("TOTK_ALIAS_GIB")?want:(8ULL<<30);
   for(uint64_t g=want;!low_space;g-=4ULL<<30){
    for(uint64_t at=LOW_SEARCH_FROM;at+LOW_SIZE+g<=GUEST_ADDRESS_LIMIT&&!low_space;at+=1ULL<<30)
@@ -182,7 +191,11 @@ static uint64_t alias_map(int unmap,uint64_t addr,uint64_t size){
   uint64_t released=0;for(unsigned i=0;i<count;i++)if(alias_pages[first+i]){alias_pages[first+i]=0;alias_stale[first+i]=1;released+=4096;}alias_bytes-=released;
   uint64_t low=addr&~0x3fffULL,high=(addr+size+0x3fff)&~0x3fffULL;
   for(uint64_t page=low;page<high;page+=0x4000){unsigned p=(unsigned)((page-start)/4096);if(!alias_pages[p]&&!alias_pages[p+1]&&!alias_pages[p+2]&&!alias_pages[p+3]){
+#ifdef _WIN32
+   if(host_mem_decommit((void *)page,0x4000))runtime_fail("decommit physical alias page");
+#else
    if(mmap((void *)page,0x4000,PROT_NONE,MAP_FIXED|MAP_PRIVATE|MAP_ANON,-1,0)!=(void *)page)runtime_fail("decommit physical alias page");
+#endif
    memset(alias_stale+p,0,4);}}
  }else if(fresh){
   uint64_t low=addr&~0x3fffULL,high=(addr+size+0x3fff)&~0x3fffULL;
@@ -200,10 +213,14 @@ void runtime_guest_committed(uint64_t *heap_bytes,uint64_t *alias_mapped){*heap_
 /* Physical memory behind the guest regions (stack+heap and alias): resident pages, of which dirty, and pages the system
    compressed. Committed sizes overstate what the game uses; these are what count against the iOS memory limit. */
 static void region_pages(uint64_t a,uint64_t end,uint64_t *resident,uint64_t *dirty,uint64_t *compressed){
+#ifdef _WIN32
+ (void)a;(void)end;(void)resident;(void)dirty;(void)compressed;   /* iOS memory reports only */
+#else
  while(a<end){vm_address_t va=(vm_address_t)a;vm_size_t vs=0;natural_t depth=0;vm_region_submap_info_data_64_t info;mach_msg_type_number_t cnt=VM_REGION_SUBMAP_INFO_COUNT_64;
   if(vm_region_recurse_64(mach_task_self(),&va,&vs,&depth,(vm_region_recurse_info_t)&info,&cnt)!=KERN_SUCCESS||va>=end)break;
   *resident+=(uint64_t)info.pages_resident*vm_page_size;*dirty+=(uint64_t)info.pages_dirtied*vm_page_size;*compressed+=(uint64_t)info.pages_swapped_out*vm_page_size;
   a=(uint64_t)va+vs;}
+#endif
 }
 void runtime_guest_resident(uint64_t *resident,uint64_t *dirty,uint64_t *compressed){
  *resident=*dirty=*compressed=0;if(!low_space)return;
@@ -230,12 +247,19 @@ static void host_error_init(void) { fprintf(stderr,"[totk] error contexts: local
 static void host_fs_init(void) { runtime_fs_init(); }
 static void host_pctl_init(void) { fprintf(stderr,"[totk] local application parental controls initialized\n"); }
 static void host_abort_init(void) { fprintf(stderr,"[totk] native crash observer initialized\n"); }
+#ifdef TOTK_CPU_JIT   /* jit_glue.c: guest functions are reached through the CPU backend */
+#define GUEST0(name) runtime_guest_call(runtime_symbol(name),0)
+#define GUEST2(name,a,b) runtime_guest_call(runtime_symbol(name),2,(uint64_t)(a),(uint64_t)(b))
+#else
+#define GUEST0(name) ((void(*)(void))runtime_symbol(name))()
+#define GUEST2(name,a,b) ((uint64_t(*)(uint64_t,uint64_t))runtime_symbol(name))((uint64_t)(a),(uint64_t)(b))
+#endif
 static void observed_os_init(uint64_t h,uint64_t args) {
- fprintf(stderr,"[totk] ENTER nnosInitialize\n");((void(*)(uint64_t,uint64_t))runtime_symbol("nnosInitialize"))(h,args);fprintf(stderr,"[totk] RETURN nnosInitialize\n");
+ fprintf(stderr,"[totk] ENTER nnosInitialize\n");GUEST2("nnosInitialize",h,args);fprintf(stderr,"[totk] RETURN nnosInitialize\n");
 }
-static void observed_sdk_init(void) { fprintf(stderr,"[totk] ENTER nninitInitializeSdkModule\n");((void(*)(void))runtime_symbol("nninitInitializeSdkModule"))();fprintf(stderr,"[totk] RETURN nninitInitializeSdkModule\n"); }
-static void observed_startup(void) { fprintf(stderr,"[totk] ENTER nninitStartup\n");((void(*)(void))runtime_symbol("nninitStartup"))();fprintf(stderr,"[totk] RETURN nninitStartup\n"); }
-static void observed_main(void) { fprintf(stderr,"[totk] ENTER nnMain\n");((void(*)(void))runtime_symbol("nnMain"))();fprintf(stderr,"[totk] RETURN nnMain\n"); }
+static void observed_sdk_init(void) { fprintf(stderr,"[totk] ENTER nninitInitializeSdkModule\n");GUEST0("nninitInitializeSdkModule");fprintf(stderr,"[totk] RETURN nninitInitializeSdkModule\n"); }
+static void observed_startup(void) { fprintf(stderr,"[totk] ENTER nninitStartup\n");GUEST0("nninitStartup");fprintf(stderr,"[totk] RETURN nninitStartup\n"); }
+static void observed_main(void) { fprintf(stderr,"[totk] ENTER nnMain\n");GUEST0("nnMain");fprintf(stderr,"[totk] RETURN nnMain\n"); }
 static void cpu_boost(int mode) { if(mode<0||mode>2)runtime_fail("unknown CPU boost mode");fprintf(stderr,"[totk] CPU boost request %d: macOS manages CPU frequency\n",mode); }
 /* TOTK_OPERATION_MODE=handheld reports the Switch handheld mode (oe OperationMode 0, PerformanceMode Normal 0) instead of
    docked (1, Boost 1): the game then uses its own handheld settings (1280x720 output, lower internal resolution), which
@@ -287,7 +311,7 @@ static uint64_t desired_language(void) {
  return result;
 }
 static uint32_t observed_region(uint64_t *out,uint64_t size){
- uint8_t *fn=runtime_symbol("_ZN2nn2os21AllocateAddressRegionEPmm");uint32_t r=((uint32_t(*)(uint64_t *,uint64_t))fn)(out,size);
+ uint8_t *fn=runtime_symbol("_ZN2nn2os21AllocateAddressRegionEPmm");uint32_t r=(uint32_t)GUEST2("_ZN2nn2os21AllocateAddressRegionEPmm",(uintptr_t)out,size);
  fprintf(stderr,"[totk] AllocateAddressRegion size=%llx result=%x address=%llx\n",(unsigned long long)size,r,(unsigned long long)(r?0:*out));
  if(r&&getenv("TOTK_TRACE_VAMM")){
   uint8_t *sdk=fn-0x12ca60;uint64_t root;memcpy(&root,sdk+0xd16bb8,8);uint64_t *v=(void *)(uintptr_t)(root+0x418);
@@ -296,7 +320,7 @@ static uint32_t observed_region(uint64_t *out,uint64_t size){
  }
  return r;
 }
-static uint32_t observed_pages(uint64_t addr,uint64_t size){uint32_t r=((uint32_t(*)(uint64_t,uint64_t))runtime_symbol("_ZN2nn2os19AllocateMemoryPagesEmm"))(addr,size);fprintf(stderr,"[totk] AllocateMemoryPages address=%llx size=%llx result=%x\n",(unsigned long long)addr,(unsigned long long)size,r);return r;}
+static uint32_t observed_pages(uint64_t addr,uint64_t size){uint32_t r=(uint32_t)GUEST2("_ZN2nn2os19AllocateMemoryPagesEmm",addr,size);fprintf(stderr,"[totk] AllocateMemoryPages address=%llx size=%llx result=%x\n",(unsigned long long)addr,(unsigned long long)size,r);return r;}
 void *runtime_observer(const char *name) {
  static const struct {const char *name;void *fn;} entries[]={
  {"_ZN2nn2os21AllocateAddressRegionEPmm",observed_region},{"_ZN2nn2os19AllocateMemoryPagesEmm",observed_pages},{"nnosInitialize",observed_os_init},{"nninitInitializeSdkModule",observed_sdk_init},{"nninitStartup",observed_startup},{"nnMain",observed_main}};
@@ -365,7 +389,11 @@ uint64_t runtime_svc(unsigned num,uint64_t *r,const char *module,uint64_t offset
  case 0x04:case 0x05:r[0]=stack_move(num==5,r[0],r[1],r[2]);return r[0];
  case 0x06: {
   uint64_t addr=r[2],base=addr&~0xfffULL,size=0x1000;unsigned state=0,perm=0,attr=0;
+#ifdef TOTK_CPU_JIT
+  uint64_t stack_lo,stack;runtime_main_stack(&stack_lo,&stack);uintptr_t top=(uintptr_t)(stack_lo+stack);   /* the main guest thread's stack */
+#else
   uintptr_t top=(uintptr_t)pthread_get_stackaddr_np(pthread_self());size_t stack=pthread_get_stacksize_np(pthread_self());
+#endif
   if(addr>=top-stack&&addr<top){base=top-stack;size=stack;state=0xb;perm=3;}
   else if(addr>=(uintptr_t)heap&&addr<(uintptr_t)heap+heap_size){base=(uintptr_t)heap;size=heap_size;state=5;perm=3;}
   else if(addr>=(uintptr_t)low_space&&addr<(uintptr_t)low_space+LOW_SIZE){base=(uintptr_t)low_space;size=LOW_SIZE;if(addr<(uintptr_t)heap){size=(uintptr_t)heap-base;}else{base=(uintptr_t)heap+heap_size;size=(uintptr_t)low_space+LOW_SIZE-base;}}

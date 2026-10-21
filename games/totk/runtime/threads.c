@@ -471,7 +471,8 @@ extern _Noreturn void runtime_thread_leave(const uint64_t *host_context,void *ar
 uint32_t (*dm_thread_tick_fn)(void);   // 取当前游戏拍；diag.c 初始化时登记（单测不登记，拍号记 0） | Gets the current game tick; registered when diag.c initializes (unit tests do not register it, the tick number is recorded as 0)
 void crash_thread_init(void);
 void guest_thread_init(void);   // thread.c：每线程 TSD 槽（门、x18、TLS、TLR）唯一设置点 | thread.c: the single place that sets the per-thread TSD slots (gate, x18, TLS, TLR)
-__attribute__((weak)) void runtime_hle_stack_set(uintptr_t top) { (void)top; }   // standalone thread probe: no host-stack switch
+__attribute__((weak)) void runtime_hle_stack_set(uintptr_t top) { (void)top; }
+static _Noreturn void thread_exit_on_host(void *argument);   // standalone thread probe: no host-stack switch
 static void *thread_main(void *p) {
     thr_t *t = p;
     pthread_setspecific(g_keythr, t);
@@ -484,6 +485,9 @@ static void *thread_main(void *p) {
     pthread_mutex_lock(&G); while (!t->started) pthread_cond_wait(&t->cv, &G); core_take(t); pthread_mutex_unlock(&G);
     { volatile char marker = 0; runtime_hle_stack_set((uintptr_t)&marker - 1024); }   // host services of this thread run below this frame
     dm_thread_enter(t->entry, t->arg, t->stack_top,t->host_context);   // 不返回：客体须经 ExitThread 退出 | Does not return: the guest must exit through ExitThread
+#ifdef TOTK_CPU_JIT
+    thread_exit_on_host(t);   // jit_glue.c: dm_thread_enter returns once the guest called ExitThread
+#endif
     die("客体线程入口返回");
 }
 static void thr_free(thr_t *t) {   // 持 G；从全部线程链摘下并释放 | Holding G; unlink from the all-threads chain and free
@@ -503,6 +507,9 @@ static _Noreturn void thread_exit_on_host(void *argument) {
     pthread_setspecific(g_keythr, NULL);
     if (t->closed) thr_free(t);
     pthread_mutex_unlock(&G);
+#ifdef TOTK_CPU_JIT
+    { extern void jit_thread_release(void); jit_thread_release(); }
+#endif
     pthread_exit(NULL);
 }
 static _Noreturn void thread_exit(thr_t *t) {
@@ -648,7 +655,11 @@ int svc_thread(int num, uint64_t *regs) {
         pthread_mutex_unlock(&G);
         regs[0] = t ? 0 : R_BAD_HANDLE; return 1;
     }
+#ifdef TOTK_CPU_JIT
+    case 0x0A: { extern void jit_request_exit(void); cur(); jit_request_exit(); return 1; }   // leaves the guest after this svc (jit_glue.c)
+#else
     case 0x0A: thread_exit(cur()); return 1;
+#endif
     case 0x0B: {  // SleepThread(x0 ns)；0/-1/-2 = 各类让出 | SleepThread(x0 ns); 0/-1/-2 = the various kinds of yield
         int64_t ns = (int64_t)regs[0];
 
@@ -895,9 +906,15 @@ void hle_bind_system_event(void *ev, int autoclear) {      // 必须在客体线
     static uint32_t (*create)(void *, int, int); static uint32_t (*getw)(const void *);
     if (!create) { create = guest_sym("_ZN2nn2os17CreateSystemEventEPNS0_15SystemEventTypeENS0_14EventClearModeEb");
                    getw = guest_sym("_ZN2nn2os30GetWritableHandleOfSystemEventEPKNS0_15SystemEventTypeE"); }
+#ifdef TOTK_CPU_JIT
+    uint32_t r = (uint32_t)runtime_guest_call((const void *)create, 3, (uint64_t)(uintptr_t)ev, (uint64_t)autoclear, (uint64_t)1);
+    if (r) die("CreateSystemEvent 失败 %#x", r);
+    wh = (uint32_t)runtime_guest_call((const void *)getw, 1, (uint64_t)(uintptr_t)ev);
+#else
     uint32_t r = create(ev, autoclear, 1);
     if (r) die("CreateSystemEvent 失败 %#x", r);
     wh = getw(ev);
+#endif
     pthread_mutex_lock(&g_se_lock);
     if (g_nse >= (int)(sizeof g_se / sizeof g_se[0])) die("SystemEvent 绑定表满");
     g_se[g_nse].ev = ev; g_se[g_nse++].wh = wh;
@@ -1009,6 +1026,9 @@ static void dump_threads(unsigned secs) {
         if (!t->wkind && !t->exited && t->mport && nrun < 64) run[nrun++] = t;
     }
     if (locked) pthread_mutex_unlock(&G);
+#ifdef _WIN32
+    (void)run; (void)nrun;   // live register snapshots need SuspendThread / GetThreadContext of JIT state: not yet
+#else
     for (int i = 0; i < nrun; i++) { thr_t *t = run[i];
 #ifdef GAME_BOTW
             if (t->mport == pthread_mach_thread_np(pthread_self())) continue;   /* dumping from a crashing guest thread: never suspend ourselves */
@@ -1026,6 +1046,7 @@ static void dump_threads(unsigned secs) {
                 usleep(20000);
             }
     }
+#endif
 }
 void runtime_dump_threads(void) { dump_threads(0); }   // TOTK_INPUT_FILE "threads"
 __attribute__((constructor)) static void dump_init(void) {

@@ -65,8 +65,14 @@ static void fill_calendar(CalendarTime *c, CalendarAdditionalInfo *info, int64_t
     if (info) {
         memset(info, 0, sizeof *info);
         info->day_of_week = tm.tm_wday; info->day_of_year = tm.tm_yday;
+#ifdef _WIN32
+        long bias = 0; _get_timezone(&bias);   /* seconds west of UTC, without daylight saving */
+        snprintf(info->name, sizeof info->name, "%s", local ? (tm.tm_isdst > 0 ? "DST" : "LOCAL") : "UTC");
+        info->dst = local && tm.tm_isdst > 0; info->utc_offset = local ? (int32_t)(-bias + (tm.tm_isdst > 0 ? 3600 : 0)) : 0;
+#else
         snprintf(info->name, sizeof info->name, "%s", local && tm.tm_zone ? tm.tm_zone : "UTC");
         info->dst = local && tm.tm_isdst > 0; info->utc_offset = local ? (int32_t)tm.tm_gmtoff : 0;
+#endif
     }
 }
 static unsigned to_calendar(CalendarTime *c, CalendarAdditionalInfo *info, const int64_t *posix) {
@@ -79,6 +85,9 @@ static int64_t to_posix_utc(const CalendarTime *c) {
 }
 
 static void location_name(char out[0x24]) {
+#ifdef _WIN32
+    memset(out, 0, 0x24); snprintf(out, 0x24, "UTC"); return;   /* Windows names zones differently from tzdata: not mapped yet */
+#endif
     memset(out, 0, 0x24); char link[512]; ssize_t n = readlink("/etc/localtime", link, sizeof link - 1);
     if (n > 0) { link[n] = 0; const char *z = strstr(link, "zoneinfo/"); snprintf(out, 0x24, "%s", z ? z + 9 : "UTC"); }
     else snprintf(out, 0x24, "UTC");

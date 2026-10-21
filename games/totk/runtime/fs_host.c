@@ -66,7 +66,12 @@ static int remove_tree(const char *path) {
     while ((e = readdir(d))) {
         if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
         snprintf(child, sizeof child, "%s/%s", path, e->d_name);
-        ok |= e->d_type == DT_DIR ? remove_tree(child) : unlink(child);
+#ifdef _WIN32
+        struct stat st; int dir = !stat(child, &st) && S_ISDIR(st.st_mode);   /* mingw's dirent has no d_type */
+#else
+        int dir = e->d_type == DT_DIR;
+#endif
+        ok |= dir ? remove_tree(child) : unlink(child);
     }
     closedir(d);
     return ok | rmdir(path);
