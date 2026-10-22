@@ -354,6 +354,7 @@ int front_window_create(int hidden) {
         window = SDL_CreateWindow(titleBase, ww, wh, flags);
     }
     if (!window) { fprintf(stderr, "[totk] window creation failed: %s\n", SDL_GetError()); return 0; }
+    { const char *fs = getenv("TOTK_FULLSCREEN"); if (fs && !strcmp(fs, "1") && !hidden) SDL_SetWindowFullscreen(window, true); }   /* start in borderless fullscreen (launcher setting) */
     sync_drawable();
     return 1;
 }

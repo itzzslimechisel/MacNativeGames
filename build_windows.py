@@ -12,8 +12,10 @@ Ninja (one build folder per version: the game-code patch tables are compiled in,
 (c) a self-contained folder is laid out:
 
   Tears of the Kingdom <version>/
-    Tears of the Kingdom.exe          double-click launcher (GUI program from tools/windows/launcher; reads settings.bat, checks
-                                      game data / .NET 10 / Vulkan 1.3 with a message box, logs to logs/totk.log)
+    Tears of the Kingdom.exe          double-click launcher (tools/windows/launcher, Dear ImGui): starts the game straight away; the setup
+                                      UI (game files import, settings, saves, controls) opens on the first run, with --setup or Shift held
+    Tears of the Kingdom <version> Settings.lnk   the launcher with --setup
+    support/                          totk_setup.py + the import tools + an embeddable Python (with cryptography, lz4) for the setup UI
     Tears of the Kingdom <version>.bat / .lnk   fallback launcher (same environment, console)
     settings.bat                      the settings you may edit (window size, sound, data folder, translator command)
     bin/totk-win.exe, runtime-index.bin, translator/   the runtime and the shader translator (needs the .NET 10 runtime)
@@ -167,11 +169,51 @@ def build_launcher(dest):
     import build as launcher_build
     cache = REPO / 'build' / 'totk-launcher.exe'
     cache.parent.mkdir(exist_ok=True)
-    srcs = [REPO / 'tools/windows/launcher' / f for f in ('launcher.c', 'launcher.rc', 'launcher.manifest', 'totk.ico')]
+    srcs = [REPO / 'tools/windows/launcher' / f for f in ('launcher.cpp', 'launcher.rc', 'launcher.manifest', 'totk.ico', 'build.py')]
     if not cache.is_file() or cache.stat().st_mtime < max(f.stat().st_mtime for f in srcs if f.is_file()):
         say('building the launcher exe')
         launcher_build.build(cache)
     shutil.copy2(cache, dest)
+
+
+def embedded_python():
+    """build/python-embed/<X.Y.Z>/: the python.org embeddable Python of the running version + cryptography + lz4 (downloaded once)."""
+    import urllib.request
+    import zipfile
+    v = '%d.%d.%d' % sys.version_info[:3]
+    root = REPO / 'build' / 'python-embed' / v
+    if (root / 'site-packages' / 'lz4').is_dir() and (root / 'python.exe').is_file():
+        return root
+    shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True)
+    url = f'https://www.python.org/ftp/python/{v}/python-{v}-embed-amd64.zip'
+    say(f'downloading {url}')
+    z = root / 'embed.zip'
+    urllib.request.urlretrieve(url, z)
+    with zipfile.ZipFile(z) as zf:
+        zf.extractall(root)
+    z.unlink()
+    run([sys.executable, '-m', 'pip', 'install', '--quiet', '--target', root / 'site-packages', '--only-binary=:all:', '--platform', 'win_amd64',
+         '--python-version', '%d.%d' % sys.version_info[:2], 'cryptography', 'lz4'])
+    for pth in root.glob('python*._pth'):   # embeddable Python ignores PYTHONPATH: list what the helper needs (paths relative to this file)
+        pth.write_text(pth.read_text().replace('#import site', 'import site') + 'site-packages\n..\n../games/totk/scripts\n')
+    return root
+
+
+def build_support(pkg, shared_with=None):
+    """pkg/support: totk_setup.py, the import tools (import_game.py, build_app.py, ExeFS/RomFS readers, expected hashes) and the Python they run on."""
+    sup = pkg / 'support'
+    py = embedded_python()
+    for src, dst in [(REPO / 'tools/windows/launcher/support/totk_setup.py', 'totk_setup.py'), (REPO / 'tools/windows/import_game.py', 'tools/windows/import_game.py'),
+                     (REPO / 'build_app.py', 'build_app.py')] + \
+                    [(REPO / 'games/totk/scripts' / f, f'games/totk/scripts/{f}') for f in ('extract_exefs.py', 'extract_romfs.py', 'prepare_modules.py')] + \
+                    [(p, f'games/totk/assets/{p.name}') for p in sorted((REPO / 'games/totk/assets').glob('expected-v*.json'))] +                     [(REPO / 'games/botw/assets' / f, f'games/botw/assets/{f}') for f in ('expected-v1.6.0.json', 'shader_list.tsv')]:   # build_app.py reads them at import
+        (sup / dst).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, sup / dst)
+    target = sup / 'python'
+    if not (target / 'python.exe').is_file() or (target / 'site-packages' / 'lz4').exists() is False:
+        link_tree(py, target, shared_with / 'python' if shared_with else None)
+    return sup
 
 
 def write_bat(path, text):
@@ -267,6 +309,12 @@ def main():
               f"$s.TargetPath='{launcher}';$s.WorkingDirectory='{pkg}';$s.WindowStyle=7;$s.Save()")
         subprocess.call(['powershell', '-NoProfile', '-Command', ps])
     build_launcher(pkg / f'{APP}.exe')
+    other = [p / 'support' for p in out.iterdir() if p.is_dir() and p != pkg and (p / 'support/python/python.exe').is_file()]
+    build_support(pkg, other[0] if other else None)
+    if not a.no_shortcut and os.name == 'nt':   # "<name> Settings.lnk": the launcher with --setup (game files, settings, saves)
+        ps = (f"$s=(New-Object -ComObject WScript.Shell).CreateShortcut('{pkg / (name + ' Settings.lnk')}');"
+              f"$s.TargetPath='{pkg / (APP + '.exe')}';$s.Arguments='--setup';$s.WorkingDirectory='{pkg}';$s.Save()")
+        subprocess.call(['powershell', '-NoProfile', '-Command', ps])
     say(f'done. Launch "{pkg / (APP + ".exe")}" (or "{launcher}" / the .lnk). Log: {pkg / "logs/totk.log"}')
 
 

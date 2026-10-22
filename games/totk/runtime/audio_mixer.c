@@ -19,6 +19,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void pull_raw(void *ctx, float *out, uint32_t frames);
+/* TOTK_VOLUME (0-100, default 100): master output gain applied to what the device pulls. */
+static void pull(void *ctx, float *out, uint32_t frames) {
+    static float gain = -1.0f;
+    pull_raw(ctx, out, frames);
+    if (gain < 0) { const char *e = getenv("TOTK_VOLUME"); int v = e && *e ? atoi(e) : 100; gain = v < 0 ? 0.0f : v > 100 ? 1.0f : (float)v / 100.0f; gain *= gain; }
+    if (gain < 0.9999f) for (uint32_t i = 0; i < frames * 2; i++) out[i] *= gain;
+}
+
 #define MAX_FRAME 1024
 #define RING_FRAMES 16384            /* stereo frames, ~340 ms at 48 kHz */
 #define SPLITTER_UNUSED 0xffffffffu
@@ -105,7 +114,7 @@ static int prefill_blocks(void) {   // read once before the device starts (audio
     }
     return blocks;
 }
-static void pull(void *ctx, float *out, uint32_t frames) {
+static void pull_raw(void *ctx, float *out, uint32_t frames) {
     Mixer *m = ctx;
     atomic_fetch_add(&m->callback_frames,frames);
     unsigned epoch=atomic_load_explicit(&m->stop_epoch,memory_order_acquire);

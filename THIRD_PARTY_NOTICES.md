@@ -23,3 +23,5 @@ Fetched or linked at build time (not in this repository):
 | [Boost](https://www.boost.org) 1.86.0 headers (`boost-1.86.0-b2-nodocs.tar.xz`, SHA-256 `a4d99d03...f51d`) | header-only dependency of dynarmic (icl, variant) | BSL-1.0 |
 | libopus (Homebrew on macOS; [opus 1.5.2](https://opus-codec.org) source, SHA-256 `65c1d2f7...7ce1`, FetchContent on Windows), linked statically | Opus audio | BSD-3-Clause |
 | libvpx (Homebrew on macOS; [libvpx v1.14.1](https://chromium.googlesource.com/webm/libvpx) source, SHA-256 `90174725...7977`, built by `games/totk/CMakeLists.txt` on Windows), linked statically | VP9 movies | BSD-3-Clause |
+| [Dear ImGui](https://github.com/ocornut/imgui) v1.91.9 (`97428e8a`), fetched at launcher build time into `build/imgui` | Windows launcher / setup UI (`tools/windows/launcher`) | MIT |
+| [Python embeddable package](https://www.python.org/downloads/windows/), `cryptography`, `lz4` (downloaded by `build_windows.py`) | Runs the import helper inside each Windows package (`support/python`) | PSF; Apache-2.0 / BSD-3-Clause (cryptography); BSD-3-Clause (lz4) |
