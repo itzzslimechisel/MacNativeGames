@@ -321,7 +321,7 @@ Dynarmic::A64::UserConfig make_config(cpu_context *ctx, Callbacks *cb, bool nest
     // the game's main thread spent ~40 % of its time recompiling during gameplay (TOTK_PROF, 1.4.3).
     { const char *e = getenv("TOTK_JIT_CODE_CACHE_MB");
       uint64_t mb = e ? strtoull(e, NULL, 10) : 0;
-      uc.code_cache_size = nested ? 64u * 1024 * 1024 : (mb ? mb : 768) * 1024 * 1024; }
+      uc.code_cache_size = nested ? 64u * 1024 * 1024 : (mb ? mb : 2048) * 1024 * 1024; }
     return uc;
 }
 
