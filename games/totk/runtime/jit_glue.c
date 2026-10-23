@@ -250,9 +250,9 @@ void jit_init(void) {
     cfg.svc = on_svc;
     cfg.exception = on_exception;
     cfg.data_abort = on_data_abort;
-    { const char *e = getenv("TOTK_JIT_PRECISE_FAULTS"); cfg.precise_aborts = !(e && !strcmp(e, "0")); }   /* exact abort state (fault recovery) */
-    { const char *e = getenv("TOTK_JIT_ACCURACY");   /* accurate | auto (default) | fast */
-      cfg.fp_accuracy = !e || !strcmp(e, "auto") ? 1 : !strcmp(e, "accurate") ? 0 : !strcmp(e, "fast") ? 2 : 1; }
+    { const char *e = getenv("TOTK_JIT_PRECISE_FAULTS"); cfg.precise_aborts = e && !strcmp(e, "1"); }   /* exact abort state (fault recovery); off by default for speed */
+    { const char *e = getenv("TOTK_JIT_ACCURACY");   /* accurate | auto | fast (default) */
+      cfg.fp_accuracy = !e || !strcmp(e, "auto") ? 2 : !strcmp(e, "accurate") ? 0 : !strcmp(e, "fast") ? 2 : 2; }
     if (cpu_backend_init(&cfg)) runtime_fail("CPU backend initialization");
     fprintf(stderr, "[totk] CPU backend: %s\n", cpu_backend_name());
 }

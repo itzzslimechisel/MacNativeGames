@@ -16,6 +16,7 @@
 #include "host_time.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <windows.h>
+#include <mmsystem.h>
 #include <stdbool.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -436,6 +437,7 @@ static void boot(void) {
 int main(int argc, char **argv) {
     _set_fmode(_O_BINARY);
     setvbuf(stderr, NULL, _IONBF, 0);
+    timeBeginPeriod(1);   /* 1 ms timer resolution for better scheduling */
     {   /* <package>\settings.ini (launcher + in-game menu); variables already in the environment win */
         int n = settings_ini_load();
         if (n >= 0) fprintf(stderr, "[totk] settings: %s (%d set from the file)\n", settings_ini_path(), n);
@@ -474,5 +476,6 @@ int main(int argc, char **argv) {
 #endif
     }
     else runtime_fail("unknown mode");
+    timeEndPeriod(1);   /* restore timer resolution (reached if frontend returns) */
     return 0;
 }

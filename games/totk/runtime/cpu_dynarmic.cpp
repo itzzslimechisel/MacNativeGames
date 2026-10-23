@@ -319,7 +319,9 @@ Dynarmic::A64::UserConfig make_config(cpu_context *ctx, Callbacks *cb, bool nest
     { const char *e = getenv("TOTK_JIT_REDUCED_FP"); if (e && !strcmp(e, "1")) { uc.unsafe_optimizations = true; uc.optimizations |= Dynarmic::OptimizationFlag::Unsafe_ReducedErrorFP; } }
     // Reserved, committed on demand (dynarmic BlockOfCode). A full cache is flushed and everything recompiled: with 128 MiB
     // the game's main thread spent ~40 % of its time recompiling during gameplay (TOTK_PROF, 1.4.3).
-    uc.code_cache_size = nested ? 64u * 1024 * 1024 : 512u * 1024 * 1024;
+    { const char *e = getenv("TOTK_JIT_CODE_CACHE_MB");
+      uint64_t mb = e ? strtoull(e, NULL, 10) : 0;
+      uc.code_cache_size = nested ? 64u * 1024 * 1024 : (mb ? mb : 768) * 1024 * 1024; }
     return uc;
 }
 
