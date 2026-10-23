@@ -292,9 +292,9 @@ Dynarmic::A64::UserConfig make_config(cpu_context *ctx, Callbacks *cb, bool nest
     uc.fastmem_pointer = uintptr_t{0};
     uc.fastmem_address_space_bits = 39;
     uc.silently_mirror_fastmem = false;
-    uc.recompile_on_fastmem_failure = true;
+    uc.recompile_on_fastmem_failure = false;
     uc.fastmem_exclusive_access = true;
-    uc.recompile_on_exclusive_fastmem_failure = true;
+    uc.recompile_on_exclusive_fastmem_failure = false;
     uc.enable_cycle_counting = false;
     uc.define_unpredictable_behaviour = true;   // e.g. stlxr wzr, xzr, [x] (main+0xcd7548): store, discard the status, as the hardware does
     uc.check_halt_on_memory_access = g_backend->cfg.precise_aborts != 0;
