@@ -596,7 +596,9 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     vkCmdSetViewport(cb, 0, 1, &vp);
     VkRect2D sc = {{0, 0}, {P.w, P.h}};
     if (R.has_sc) {
-        long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
+        long x0, y0, x1, y1;
+        if (R.sc.x < 0) { x0 = 0; x1 = R.sc.w; } else { x0 = R.sc.x; x1 = (long)R.sc.x + R.sc.w; }
+        if (R.sc.y < 0) { y0 = 0; y1 = R.sc.h; } else { y0 = R.sc.y; y1 = (long)R.sc.y + R.sc.h; }
         if (x1 > (long)P.w) x1 = P.w; if (y1 > (long)P.h) y1 = P.h;
         if (x1 <= x0 || y1 <= y0) return;
         sc = (VkRect2D){{(int32_t)x0, (int32_t)y0}, {(uint32_t)(x1 - x0), (uint32_t)(y1 - y0)}};
@@ -670,7 +672,9 @@ static void dispatch(const p_dispatch *dp) {
 static VkRect2D clear_rect(void) {
     VkRect2D r = {{0, 0}, {P.w, P.h}};
     if (R.has_sc) {
-        long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
+        long x0, y0, x1, y1;
+        if (R.sc.x < 0) { x0 = 0; x1 = R.sc.w; } else { x0 = R.sc.x; x1 = (long)R.sc.x + R.sc.w; }
+        if (R.sc.y < 0) { y0 = 0; y1 = R.sc.h; } else { y0 = R.sc.y; y1 = (long)R.sc.y + R.sc.h; }
         if (x1 > (long)P.w) x1 = P.w; if (y1 > (long)P.h) y1 = P.h;
         if (x1 <= x0 || y1 <= y0) { r.extent.width = r.extent.height = 0; return r; }
         r = (VkRect2D){{(int32_t)x0, (int32_t)y0}, {(uint32_t)(x1 - x0), (uint32_t)(y1 - y0)}};
